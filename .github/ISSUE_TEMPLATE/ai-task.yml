@@ -1,0 +1,109 @@
+name: AI 开发任务
+description: 供 Codex 编写、TRAE 执行的结构化开发任务
+title: "[AI任务] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        本任务是 Codex 与 TRAE 之间的唯一需求来源。实现前请阅读根目录 AGENTS.md。
+
+  - type: dropdown
+    id: executor
+    attributes:
+      label: 执行代理
+      description: 指定主要实现者
+      options:
+        - TRAE
+        - Codex
+        - 任一代理
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 任务目标
+      description: 用一句话说明用户最终要得到什么
+      placeholder: 完成后，用户可以……
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景与现状
+      description: 说明当前行为、问题、相关页面或接口
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 实现范围
+      description: 列出允许修改的模块、页面、接口或文件
+      placeholder: |
+        - 修改……
+        - 新增……
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 不在本次范围
+      description: 明确不得顺带修改的内容
+      placeholder: |
+        - 不调整……
+        - 不升级……
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 使用可检查、可判断通过与否的条目
+      placeholder: |
+        - [ ] 条件一
+        - [ ] 条件二
+        - [ ] 异常场景……
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: 必须执行的验证
+      description: 列出测试、类型检查、构建及人工验证步骤
+      value: |
+        - [ ] npm ci
+        - [ ] npm run check
+        - [ ] npm run build
+        - [ ] 如涉及 Python：python -m compileall -q server
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与注意事项
+      description: 包括安全、兼容、数据、迁移和回滚要求
+      placeholder: 无已知特殊风险，或列出具体风险。
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 参考资料
+      description: 相关文件、截图、设计稿、Issue 或文档链接
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: 任务就绪确认
+      options:
+        - label: 已给出足够上下文，TRAE 无需从聊天记录猜测需求
+          required: true
+        - label: 验收标准可以客观核验
+          required: true
+        - label: 未在任务中粘贴密码、Token 或其他敏感信息
+          required: true
