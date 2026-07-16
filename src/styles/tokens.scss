@@ -1,0 +1,134 @@
+:root {
+  // ── 背景 ──
+  --bg-page: #020b18;
+  --bg-panel: rgba(5, 18, 38, 0.85);
+  --bg-panel-solid: #051226;
+  --bg-card: rgba(255, 255, 255, 0.025);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+
+  // ── 边框 ──
+  --border-blue: rgba(0, 174, 255, 0.55);
+  --border-blue-dim: rgba(0, 174, 255, 0.25);
+  --border-faint: rgba(143, 169, 200, 0.15);
+
+  // ── 文字 ──
+  --text-main: #e8f3ff;
+  --text-muted: #8fa9c8;
+  --text-faint: #5a7396;
+
+  // ── 主题色 ──
+  --green: #69e36f;
+  --blue: #2f9cff;
+  --purple: #a66cff;
+  --cyan: #00e5ff;
+  --warning: #ffb347;
+  --danger: #ff4f5e;
+
+  // ── 间距（4px 基准）──
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  // ── 圆角 ──
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  // ── 阴影 ──
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-glow-blue: 0 0 12px rgba(0, 174, 255, 0.2);
+  --shadow-glow-green: 0 0 12px rgba(105, 227, 111, 0.2);
+
+  // ── 过渡 ──
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
+  --duration-slow: 0.35s;
+
+  // ── 字体 ──
+  --font-sans: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-num: 'DIN Alternate', 'Bahnschrift', 'Roboto Mono', 'Consolas', monospace;
+
+  // ── 字号层级 ──
+  --fs-platform-title: 32px;   // 平台标题
+  --fs-module-title: 16px;     // 一级模块标题
+  --fs-subtitle: 13px;         // 二级小标题
+  --fs-body: 12px;             // 正文说明
+  --fs-caption: 11px;          // 弱信息
+  --fs-kpi-num: 36px;          // KPI 大数字
+  --fs-metric-num: 24px;       // 右侧指标数字
+  --fs-unit: 12px;             // 单位文字
+
+  // ── 布局尺寸（1920×1080 基准）──
+  --header-h: 97px;
+  --kpi-h: 184px;
+  --timeline-h: 92px;
+  --main-gap: 10px;
+
+  // ── 面板 ──
+  --panel-radius: 6px;
+  --panel-pad: 10px;
+  --panel-pad-sm: 8px;
+}
+
+// ── 普通面板：低亮度边框，无外发光 ──
+@mixin panel-base {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-blue-dim);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(4px);
+}
+
+// ── 重点面板：轻微内发光 ──
+@mixin panel-accent {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-blue);
+  border-radius: var(--panel-radius);
+  box-shadow:
+    0 0 1px rgba(0, 174, 255, 0.15) inset,
+    var(--shadow-md);
+  backdrop-filter: blur(4px);
+}
+
+// ── KPI 分组面板：按色系轻微描边 ──
+@mixin kpi-border($color) {
+  border: 1px solid rgba($color, 0.35);
+  box-shadow: var(--shadow-md);
+}
+
+@mixin text-glow($color) {
+  text-shadow: 0 0 6px rgba($color, 0.4);
+}
+
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// ── 交互态通用 ──
+@mixin hover-lift {
+  transition: transform var(--duration-normal) var(--ease-out), background var(--duration-fast) ease;
+  &:hover {
+    transform: translateY(-1px);
+    background: var(--bg-hover);
+  }
+}
+
+@mixin focus-ring($color: var(--cyan)) {
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba($color, 0.4);
+  }
+}
