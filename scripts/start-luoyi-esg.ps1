@@ -6,6 +6,10 @@ $FrontendUrl = "http://localhost:5173/#/"
 $GisPreviewUrl = "http://localhost:5173/#/gis-preview"
 $WorkspaceUrl = "http://localhost:5173/#/workspace"
 $GaodeTileUrl = "https://webst01.is.autonavi.com/appmaptile?style=6&x=205&y=110&z=8"
+$MySqlPort = 3307
+$MySqlExe = "E:\Mysql\mysql-8.4.9-winx64\bin\mysqld.exe"
+$MySqlCnf = "E:\Mysql\my-luoyi.cnf"
+$MySqlLog = "E:\Mysql\logs\luoyi-mysql.err"
 
 function Write-Step($Text) {
   Write-Host ""
@@ -54,16 +58,55 @@ function Test-JsonApiCodeOk($Url, $TimeoutSec = 3) {
   }
 }
 
+function Start-LuoyiMySql() {
+  if (Test-TcpPort "127.0.0.1" $MySqlPort) {
+    Write-Host "MySQL port $MySqlPort is reachable." -ForegroundColor Green
+    return $true
+  }
+
+  Write-Host "MySQL port $MySqlPort is not reachable. Trying to start local MySQL..." -ForegroundColor Yellow
+
+  if (-not (Test-Path $MySqlExe)) {
+    Write-Host "MySQL executable not found: $MySqlExe" -ForegroundColor Red
+    return $false
+  }
+
+  if (-not (Test-Path $MySqlCnf)) {
+    Write-Host "MySQL config not found: $MySqlCnf" -ForegroundColor Red
+    return $false
+  }
+
+  Start-Process `
+    -FilePath $MySqlExe `
+    -ArgumentList "--defaults-file=$MySqlCnf" `
+    -WorkingDirectory (Split-Path -Parent $MySqlExe) `
+    -WindowStyle Hidden
+
+  for ($i = 0; $i -lt 25; $i++) {
+    if (Test-TcpPort "127.0.0.1" $MySqlPort) {
+      Write-Host "MySQL started on port $MySqlPort." -ForegroundColor Green
+      return $true
+    }
+    Start-Sleep -Seconds 1
+  }
+
+  Write-Host "MySQL did not become ready within 25 seconds." -ForegroundColor Red
+  if (Test-Path $MySqlLog) {
+    Write-Host "Last MySQL log lines:" -ForegroundColor Yellow
+    Get-Content $MySqlLog -Tail 12
+  }
+  return $false
+}
+
 Set-Location $Root
 
 Write-Host "Project root: $Root"
 
-Write-Step "Check MySQL 127.0.0.1:3307"
-if (Test-TcpPort "127.0.0.1" 3307) {
-  Write-Host "MySQL port 3307 is reachable." -ForegroundColor Green
+Write-Step "Start or check MySQL 127.0.0.1:$MySqlPort"
+if (Start-LuoyiMySql) {
+  Write-Host "MySQL is ready for dynamic KPI and GIS data." -ForegroundColor Green
 } else {
-  Write-Host "MySQL port 3307 is not reachable. Backend data may be unavailable." -ForegroundColor Yellow
-  Write-Host "Start MySQL first if KPI or GIS data is empty." -ForegroundColor Yellow
+  Write-Host "MySQL is unavailable. Backend will use available fallback data where supported." -ForegroundColor Yellow
 }
 
 Write-Step "Start backend API"
