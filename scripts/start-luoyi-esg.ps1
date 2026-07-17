@@ -38,6 +38,22 @@ function Test-HttpOk($Url, $TimeoutSec = 3) {
   }
 }
 
+function Test-JsonApiCodeOk($Url, $TimeoutSec = 3) {
+  try {
+    $Response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec
+    if ([int]$Response.StatusCode -lt 200 -or [int]$Response.StatusCode -ge 400) {
+      return $false
+    }
+    $Body = $Response.Content | ConvertFrom-Json
+    if ($null -ne $Body.code) {
+      return [int]$Body.code -eq 0
+    }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
 Set-Location $Root
 
 Write-Host "Project root: $Root"
@@ -66,7 +82,7 @@ if (Test-HttpOk "$BackendUrl/health") {
 }
 
 Write-Step "Check GIS API"
-if (Test-HttpOk "$BackendUrl/api/esg/gis/layers") {
+if (Test-JsonApiCodeOk "$BackendUrl/api/esg/gis/layers?projectId=LUOYI-ESG") {
   Write-Host "GIS layers API is OK: $BackendUrl/api/esg/gis/layers" -ForegroundColor Green
 } else {
   Write-Host "GIS layers API is not ready. Check backend and database." -ForegroundColor Yellow

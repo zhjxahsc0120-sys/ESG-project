@@ -13,8 +13,10 @@ import mysql_api
 from mysql_db import mysql_enabled, mysql_ping
 
 BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
 DB_PATH = BASE_DIR / "data" / "luoyi_esg_dev.db"
 DASHBOARD_PAYLOAD_PATH = BASE_DIR / "dashboard_payload.json"
+GIS_MANIFEST_PATH = ROOT_DIR / "public" / "data" / "shp" / "manifest.json"
 UPLOAD_DIR = BASE_DIR / "storage" / "uploads" / "202607"
 HOST = "127.0.0.1"
 PORT = 8765
@@ -51,6 +53,169 @@ def load_dashboard_payload() -> dict:
     if not DASHBOARD_PAYLOAD_PATH.exists():
         return {}
     return json.loads(DASHBOARD_PAYLOAD_PATH.read_text(encoding="utf-8"))
+
+
+def load_gis_manifest() -> dict:
+    if not GIS_MANIFEST_PATH.exists():
+        return {"layers": []}
+    return json.loads(GIS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def gis_static_layers(
+    project_id: str = "LUOYI-ESG",
+    section_id: str | None = None,
+    current_time: str | None = None,
+    visible_layer_ids: list[str] | None = None,
+) -> dict:
+    manifest = load_gis_manifest()
+    layers = manifest.get("layers") or []
+    visible_set = set(visible_layer_ids or [])
+    data = []
+    for layer in layers:
+        if not layer.get("enabled", True):
+            continue
+        if visible_set and layer.get("id") not in visible_set:
+            continue
+        if section_id and layer.get("objectType") == "road-section":
+            if section_id not in {layer.get("id"), layer.get("name")}:
+                continue
+        data.append(
+            {
+                "id": layer.get("id"),
+                "name": layer.get("name"),
+                "geometryType": layer.get("geometryType"),
+                "enabled": bool(layer.get("enabled", True)),
+                "objectType": layer.get("objectType"),
+                "featureCount": int(layer.get("featureCount") or 0),
+                "fields": layer.get("fields") or [],
+                "source": {
+                    **(layer.get("source") or {}),
+                    "type": "api",
+                },
+                "style": layer.get("style") or {},
+            }
+        )
+    return {
+        "code": 0,
+        "data": data,
+        "meta": {
+            "projectId": project_id,
+            "sectionId": section_id,
+            "currentTime": current_time,
+            "total": len(data),
+            "fallback": "static-geojson",
+        },
+    }
+
+
+def geojson_path_from_source_url(url: str | None) -> Path | None:
+    if not url:
+        return None
+    normalized = unquote(url)
+    if normalized.startswith("/"):
+        normalized = normalized.lstrip("/")
+    if normalized.startswith("data/"):
+        normalized = f"public/{normalized}"
+    return ROOT_DIR / normalized.replace("/", "\\")
+
+
+def gis_empty_relation_summary() -> dict:
+    return {"total": 0, "pendingCount": 0, "highRiskCount": 0, "byType": []}
+
+
+GIS_STATIC_FEATURE_META = {
+    "section-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "section-2": {"sectionId": "2标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "section-3": {"sectionId": "3标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "waste-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "waste-2": {"sectionId": "2标段", "status": "attention", "statusLabel": "关注", "riskLevel": 2},
+    "water-1": {"sectionId": "2标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "water-2": {"sectionId": "3标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "eco-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "slope-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "slope-2": {"sectionId": "2标段", "status": "attention", "statusLabel": "关注", "riskLevel": 2},
+}
+
+
+def gis_static_features(
+    project_id: str = "LUOYI-ESG",
+    layer_id: str | None = None,
+    section_id: str | None = None,
+    current_time: str | None = None,
+) -> dict:
+    manifest = load_gis_manifest()
+    layers = manifest.get("layers") or []
+    features = []
+    for layer in layers:
+        if not layer.get("enabled", True):
+            continue
+        if layer_id and layer.get("id") != layer_id:
+            continue
+        layer_meta = GIS_STATIC_FEATURE_META.get(layer.get("id"), {})
+        layer_section_id = layer_meta.get("sectionId")
+        if section_id and section_id != layer_section_id:
+            continue
+        source = layer.get("source") or {}
+        geojson_path = geojson_path_from_source_url(source.get("url"))
+        if not geojson_path or not geojson_path.exists():
+            continue
+        collection = json.loads(geojson_path.read_text(encoding="utf-8"))
+        for index, item in enumerate(collection.get("features") or [], 1):
+            properties = item.get("properties") or {}
+            name = properties.get("NAME") or properties.get("name") or layer.get("name") or layer.get("id")
+            feature_id = f"{layer.get('id')}-{index}"
+            feature_properties = {
+                **properties,
+                **layer_meta,
+                "sourceMode": "static-geojson",
+                "projectId": project_id,
+            }
+            status = layer_meta.get("status") or "normal"
+            status_label = layer_meta.get("statusLabel") or "正常"
+            risk_level = int(layer_meta.get("riskLevel") or 1)
+            features.append(
+                {
+                    "id": feature_id,
+                    "layerId": layer.get("id"),
+                    "objectType": layer.get("objectType"),
+                    "name": name,
+                    "geometry": item.get("geometry") or {},
+                    "properties": feature_properties,
+                    "status": status,
+                    "statusLabel": status_label,
+                    "riskLevel": risk_level,
+                    "businessSummary": {
+                        "statusCode": status,
+                        "statusLabel": status_label,
+                        "title": name,
+                        "dashboardRows": [
+                            {"label": "图层", "value": layer.get("name")},
+                            {"label": "来源", "value": "本地 GeoJSON"},
+                        ],
+                        "dashboardNote": "MySQL 不可用时展示本地 GIS 基础图层；业务关联事项待数据库恢复后显示。",
+                        "previewRows": [
+                            {"label": key, "value": value}
+                            for key, value in properties.items()
+                        ],
+                        "targetModule": "GIS",
+                        "targetRoute": None,
+                    },
+                    "relationSummary": gis_empty_relation_summary(),
+                    "updatedAt": current_time,
+                }
+            )
+    return {
+        "code": 0,
+        "data": features,
+        "meta": {
+            "projectId": project_id,
+            "sectionId": section_id,
+            "currentTime": current_time,
+            "layerId": layer_id,
+            "total": len(features),
+            "fallback": "static-geojson",
+        },
+    }
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: object, status: int = HTTPStatus.OK) -> None:
@@ -781,7 +946,8 @@ class Handler(BaseHTTPRequestHandler):
             visible_layer_ids = [item for item in (visible_layer_ids_raw or "").split(",") if item] or None
             payload = try_mysql(mysql_api.get_gis_layers, project_id, section_id, current_time, visible_layer_ids)
             if payload is None:
-                json_response(self, {"code": 500, "message": "GIS MySQL 数据暂不可用", "data": []}, HTTPStatus.OK)
+                payload = gis_static_layers(project_id, section_id, current_time, visible_layer_ids)
+                json_response(self, payload, HTTPStatus.OK)
             else:
                 json_response(self, payload)
             return
@@ -793,7 +959,8 @@ class Handler(BaseHTTPRequestHandler):
             layer_id = (query.get("layerId") or [None])[0]
             payload = try_mysql(mysql_api.get_gis_features, project_id, layer_id, section_id, current_time)
             if payload is None:
-                json_response(self, {"code": 500, "message": "GIS MySQL 数据暂不可用", "data": []}, HTTPStatus.OK)
+                payload = gis_static_features(project_id, layer_id, section_id, current_time)
+                json_response(self, payload, HTTPStatus.OK)
             else:
                 json_response(self, payload)
             return
