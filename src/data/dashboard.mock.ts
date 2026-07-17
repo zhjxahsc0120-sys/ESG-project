@@ -15,8 +15,13 @@ import type {
 } from '@/types/dashboard'
 
 export const navItems: NavItem[] = [
-  { key: 'dashboard', label: '总览看板', active: true },
-  { key: 'workspace', label: '数据填报与上传工作台' },
+  { key: 'dashboard', label: '工作台首页', active: true },
+  { key: 'compliance', label: '合规底线管理' },
+  { key: 'carbon', label: '碳足迹与低碳增益' },
+  { key: 'risk', label: '风险预警与督办' },
+  { key: 'gis', label: '项目现场一张图' },
+  { key: 'monthly', label: '月报管理' },
+  { key: 'documents', label: '资料与档案' },
 ]
 
 export const kpiGroups: KpiGroup[] = [

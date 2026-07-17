@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import PanelCard from '@/components/layout/PanelCard.vue'
 import RingChart from '@/components/charts/RingChart.vue'
 import { useDashboardStore } from '@/stores/dashboard.store'
@@ -6,12 +7,22 @@ import { Leaf } from 'lucide-vue-next'
 
 const store = useDashboardStore()
 
-const chartData = [
-  { name: '施工用油', value: 58, color: '#2f9cff' },
-  { name: '施工用电', value: 24, color: '#69e36f' },
-  { name: '主要材料', value: 13, color: '#a66cff' },
-  { name: '其他', value: 5, color: '#ffb347' },
-]
+const sourceColors: Record<string, string> = {
+  施工用油: '#2f9cff',
+  施工用电: '#69e36f',
+  主要材料: '#a66cff',
+  其他: '#ffb347',
+}
+
+const chartData = computed(() => {
+  const total = store.carbonSrc.reduce((sum, item) => sum + Number(item.value || 0), 0)
+  if (!total) return []
+  return store.carbonSrc.map((item) => ({
+    name: item.name,
+    value: Number(((Number(item.value || 0) / total) * 100).toFixed(1)),
+    color: item.color || sourceColors[item.name],
+  }))
+})
 
 const levelColors: Record<string, string> = {
   高: '#69e36f',

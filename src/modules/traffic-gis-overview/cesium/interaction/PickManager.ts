@@ -22,8 +22,33 @@ export class PickManager {
       Cesium.ScreenSpaceEventType.MOUSE_MOVE,
     );
   }
+  private normalizePickPosition(position: Cesium.Cartesian2): Cesium.Cartesian2 {
+    const canvas = this.viewer.scene.canvas;
+    const rect = canvas.getBoundingClientRect();
+
+    if (!rect.width || !rect.height) return position;
+
+    const scaleX = canvas.clientWidth / rect.width;
+    const scaleY = canvas.clientHeight / rect.height;
+
+    if (
+      !Number.isFinite(scaleX) ||
+      !Number.isFinite(scaleY) ||
+      scaleX <= 0 ||
+      scaleY <= 0
+    ) {
+      return position;
+    }
+
+    if (Math.abs(scaleX - 1) < 1e-4 && Math.abs(scaleY - 1) < 1e-4) {
+      return position;
+    }
+
+    return new Cesium.Cartesian2(position.x * scaleX, position.y * scaleY);
+  }
   private pick(position: Cesium.Cartesian2): PickResult | undefined {
-    const picked = this.viewer.scene.pick(position);
+    const normalized = this.normalizePickPosition(position);
+    const picked = this.viewer.scene.pick(normalized);
     const entity = picked?.id as Cesium.Entity | undefined;
     const feature = entity?.properties?.trafficFeature?.getValue(
       Cesium.JulianDate.now(),

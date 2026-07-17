@@ -1,4 +1,6 @@
 import type {
+  BusinessLinksResponse,
+  RelationsResponse,
   TrafficDataAdapter,
   TrafficLayerDefinition,
   TrafficMapContext,
@@ -17,6 +19,18 @@ export class HttpTrafficAdapter implements TrafficDataAdapter {
       ...context,
       layerId: layer.id,
     });
+  }
+  async getRelations(feature: TrafficMapFeature, context: TrafficMapContext) {
+    return this.request<RelationsResponse>(
+      `/features/${feature.id}/relations`,
+      { projectId: context.projectId },
+    );
+  }
+  async getBusinessLinks(feature: TrafficMapFeature, context: TrafficMapContext) {
+    return this.request<BusinessLinksResponse>(
+      `/features/${feature.id}/business-links`,
+      { projectId: context.projectId },
+    );
   }
   private async request<T>(path: string, params: Record<string, unknown>) {
     const query = new URLSearchParams(

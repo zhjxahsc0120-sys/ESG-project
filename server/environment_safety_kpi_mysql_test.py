@@ -45,6 +45,11 @@ def main() -> int:
     assert_true(status_data == {"整改中": 2, "待复查": 2, "待销项": 1}, f"E02 statusData mismatch: {status_data}")
     assert_true("逾期" not in status_data, "E02 statusData must not include overdue as primary status")
     assert_true(any(item.get("overdue") is True and item.get("mainStatus") == "整改中" for item in e02.get("detailData", [])), "E02 overdue flag/mainStatus mismatch")
+    e02_by_source = {item.get("sourceId"): item for item in e02.get("detailData", [])}
+    assert_true("E02-003" in e02_by_source, "E02 detailData should expose sourceId E02-003 for GIS linking")
+    assert_true(e02_by_source["E02-003"].get("sourceTable") == "env_issue_record", "E02 sourceTable mismatch")
+    assert_true(e02_by_source["E02-003"].get("gisFeatureId") == "section-2-1", "E02-003 GIS feature mapping mismatch")
+    assert_true("E02-005" in e02_by_source, "E02 detailData should expose sourceId E02-005 for GIS linking")
 
     s02 = get_json("/api/dashboard/kpi/S02")
     assert_true("safety_risk_point" in s02.get("dataSource", ""), "S02 should come from safety_risk_point")
@@ -55,6 +60,12 @@ def main() -> int:
     assert_true(summary_value(s02, "涉及工点") == 4, "S02 location count mismatch")
     statuses = {item.get("status") for item in s02.get("detailData", [])}
     assert_true(statuses <= {"持续管控", "正常管控"}, f"S02 status wording mismatch: {statuses}")
+    s02_by_source = {item.get("sourceId"): item for item in s02.get("detailData", [])}
+    assert_true("S02-002" in s02_by_source, "S02 detailData should expose sourceId S02-002 for GIS linking")
+    assert_true(s02_by_source["S02-002"].get("sourceTable") == "safety_risk_point", "S02 sourceTable mismatch")
+    assert_true(s02_by_source["S02-002"].get("gisFeatureId") == "section-2-1", "S02-002 GIS feature mapping mismatch")
+    assert_true("S02-006" in s02_by_source, "S02 detailData should expose sourceId S02-006 for GIS linking")
+    assert_true(s02_by_source["S02-006"].get("gisFeatureId") == "slope-2-1", "S02-006 GIS feature mapping mismatch")
 
     print("✅ E01/E02/S02 环境与安全 KPI MySQL 明细聚合验收通过。")
     return 0
@@ -66,4 +77,3 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"❌ E01/E02/S02 环境与安全 KPI MySQL 明细聚合验收失败：{exc}", file=sys.stderr)
         raise SystemExit(1)
-

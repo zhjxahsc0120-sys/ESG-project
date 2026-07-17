@@ -36,10 +36,14 @@ def main() -> int:
     source = topic.get("topicData", {}).get("source", {})
     assert_true(cumulative.get("months") == ["2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07"], "cumulative months mismatch")
     assert_true(cumulative.get("monthlyData")[-1] == 1256, "cumulative monthly data mismatch")
+    assert_true(cumulative.get("chartTitle") == "月度排放与累计碳足迹趋势", "cumulative chart title mismatch")
     assert_true(cumulative.get("cumulativeData")[-1] == 12856, "cumulative total data mismatch")
     assert_true(benefit.get("totalReduction") == 1445, "benefit total reduction mismatch")
     assert_true(benefit.get("reductionRate") == 10.1, "benefit reduction rate mismatch")
     assert_true(len(source.get("detailData", [])) == 4, "source detail row count mismatch")
+    colors = {item.get("name"): item.get("color") for item in source.get("items", [])}
+    assert_true(colors.get("施工用油") == "#2f9cff", "oil source color mismatch")
+    assert_true(colors.get("施工用电") == "#69e36f", "electricity source color mismatch")
 
     print("[PASS] 碳足迹与低碳增益专题 MySQL 业务表聚合验收通过。")
     return 0

@@ -64,6 +64,7 @@ export type EffectivenessItem = {
 export type CarbonSource = {
   name: string
   value: number
+  color?: string
 }
 
 export type ReductionMeasure = {
@@ -82,6 +83,8 @@ export type MonthlyReport = {
   progress: number
   pendingCount: number
   confirmCount: number
+  currentStatus?: string
+  expectedCompletion?: string
   materials: MonthlyMaterial[]
 }
 
@@ -90,6 +93,14 @@ export type TimelineStep = {
   label: string
   active?: boolean
   completed?: boolean
+}
+
+export interface KpiModalFocusContext {
+  sourceTable?: string
+  sourceId?: string
+  gisFeatureId?: string
+  from?: 'gis' | 'dashboard' | 'workspace'
+  title?: string
 }
 
 // ── 弹窗详情类型 ──

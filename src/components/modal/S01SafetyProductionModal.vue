@@ -120,6 +120,8 @@ async function loadData() {
       currentStage: data.currentStage,
       currentStageDetail: data.currentStageDetail,
       countingStatus: data.countingStatus as CountingStatus,
+      latestInterruptDate: data.latestInterruptDate,
+      latestInterruptReason: data.latestInterruptReason,
       updateTime: data.updateTime,
     }
     if (data.constructionStages) {

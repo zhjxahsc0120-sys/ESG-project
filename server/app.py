@@ -798,6 +798,35 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, payload)
             return
 
+        if path.startswith("/api/esg/gis/features/"):
+            project_id = (query.get("projectId") or ["LUOYI-ESG"])[0]
+            feature_path = path.removeprefix("/api/esg/gis/features/")
+            if feature_path.endswith("/business-links"):
+                feature_id = unquote(feature_path.removesuffix("/business-links").rstrip("/"))
+                payload = try_mysql(mysql_api.get_gis_feature_business_links, feature_id, project_id)
+                if payload is None:
+                    json_response(self, {"code": 500, "message": "GIS feature business links MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
+                else:
+                    json_response(self, payload)
+                return
+
+            if feature_path.endswith("/relations"):
+                feature_id = unquote(feature_path.removesuffix("/relations").rstrip("/"))
+                payload = try_mysql(mysql_api.get_gis_feature_relations, feature_id, project_id)
+                if payload is None:
+                    json_response(self, {"code": 500, "message": "GIS feature relations MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
+                else:
+                    json_response(self, payload)
+                return
+
+            feature_id = unquote(feature_path)
+            payload = try_mysql(mysql_api.get_gis_feature_detail, feature_id, project_id)
+            if payload is None:
+                json_response(self, {"code": 500, "message": "GIS feature detail MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
+            else:
+                json_response(self, payload)
+            return
+
         if path == "/api/dashboard/kpis":
             json_response(self, get_dashboard_kpis())
             return

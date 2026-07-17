@@ -2,12 +2,13 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import { X, AlertTriangle, ShieldCheck, FileCheck, Clock, MapPin } from 'lucide-vue-next'
-import type { KpiDetailConfig, KpiDetailBottomItem, TopicTab } from '@/types/dashboard'
+import type { KpiDetailConfig, KpiDetailBottomItem, TopicTab, KpiModalFocusContext } from '@/types/dashboard'
 import { carbonTabData, monthlyTabData } from '@/data/dashboard.mock'
 import S01SafetyProductionModal from './S01SafetyProductionModal.vue'
 
 const props = defineProps<{
   detail: KpiDetailConfig
+  focusContext?: KpiModalFocusContext | null
 }>()
 
 const emit = defineEmits<{
@@ -20,6 +21,9 @@ let chart: echarts.ECharts | null = null
 
 const showSuperviseToast = ref(false)
 let superviseTimer: ReturnType<typeof setTimeout> | null = null
+
+const focusRowRef = ref<HTMLTableRowElement | null>(null)
+const focusScrollDone = ref(false)
 
 const themeColor = computed(() => {
   const map: Record<string, string> = {
@@ -493,6 +497,72 @@ const filteredS02DetailData = computed(() => {
   if (filter === 'near') return props.detail.detailData.filter((d: any) => d.status === '临近关键作业')
   return props.detail.detailData
 })
+
+function findFocusedRowIndex(rows: KpiDetailBottomItem[]): number {
+  const ctx = props.focusContext
+  if (!ctx) return -1
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] as any
+    if (ctx.sourceId && row.sourceId === ctx.sourceId) return i
+    if (ctx.sourceId && row.id === ctx.sourceId) return i
+  }
+  if (ctx.gisFeatureId) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as any
+      if (row.gisFeatureId === ctx.gisFeatureId) return i
+    }
+  }
+  return -1
+}
+
+const hasFocusContext = computed(() => {
+  const ctx = props.focusContext
+  if (!ctx) return false
+  if (props.detail.key !== 'E02' && props.detail.key !== 'S02') return false
+  return !!(ctx.sourceId || ctx.gisFeatureId)
+})
+
+const e02FocusedIndex = computed(() => {
+  if (!hasFocusContext.value || props.detail.key !== 'E02') return -1
+  return findFocusedRowIndex(e02FilteredDetailData.value)
+})
+
+const s02FocusedIndex = computed(() => {
+  if (!hasFocusContext.value || props.detail.key !== 'S02') return -1
+  return findFocusedRowIndex(filteredS02DetailData.value)
+})
+
+const focusNotFound = computed(() => {
+  if (!hasFocusContext.value) return false
+  if (props.detail.key === 'E02') return e02FocusedIndex.value === -1
+  if (props.detail.key === 'S02') return s02FocusedIndex.value === -1
+  return false
+})
+
+const focusSourceText = computed(() => {
+  const ctx = props.focusContext
+  if (!ctx) return ''
+  const key = props.detail.key
+  if (ctx.title) {
+    if (key === 'E02') return `已从 GIS 地图定位到：${ctx.title}`
+    if (key === 'S02') return `已从 GIS 地图定位到：${ctx.title}`
+    return `已从 GIS 地图定位到：${ctx.title}`
+  }
+  if (ctx.sourceId) {
+    if (key === 'E02') return `已从 GIS 地图定位到关联环保问题：${ctx.sourceId}`
+    if (key === 'S02') return `已从 GIS 地图定位到关联安全风险点：${ctx.sourceId}`
+  }
+  return '已从 GIS 地图定位到关联记录'
+})
+
+const focusNotFoundText = computed(() => {
+  return '已打开对应指标弹窗，但未在当前明细中找到该 GIS 关联记录。'
+})
+
+const isFromGis = computed(() => props.focusContext?.from === 'gis')
+const isGisViewOnlyKpi = computed(() =>
+  isFromGis.value && (props.detail.key === 'E02' || props.detail.key === 'S02'),
+)
 
 const filteredMonthlyDetailData = computed(() => {
   if (!props.detail.detailData) return []
@@ -1162,11 +1232,37 @@ watch(activeTab, () => {
 })
 
 watch(() => props.detail.key, () => {
+  focusScrollDone.value = false
   nextTick(() => {
     initChart()
     modalRef.value?.focus()
   })
 })
+
+watch([hasFocusContext, e02FocusedIndex, s02FocusedIndex, () => props.detail.key], () => {
+  if (!hasFocusContext.value) return
+  const key = props.detail.key
+  if (key === 'E02') {
+    if (e02FocusedIndex.value === -1 && e02TableFilter.value) {
+      e02TableFilter.value = null
+    }
+  } else if (key === 'S02') {
+    if (s02FocusedIndex.value === -1 && s02Filter.value !== 'all') {
+      s02Filter.value = 'all'
+    }
+  }
+}, { immediate: true })
+
+watch([e02FocusedIndex, s02FocusedIndex], () => {
+  if (!hasFocusContext.value || focusScrollDone.value) return
+  const idx = props.detail.key === 'E02' ? e02FocusedIndex.value : s02FocusedIndex.value
+  if (idx >= 0) {
+    nextTick(() => {
+      focusRowRef.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      focusScrollDone.value = true
+    })
+  }
+}, { immediate: true })
 
 onMounted(() => {
   nextTick(() => {
@@ -1612,6 +1708,15 @@ onUnmounted(() => {
 
           <!-- 明细表格 -->
           <div class="detail-section" v-if="!(detail.key === 'CARBON' && ['cost', 'measures'].includes(activeTab)) && !(detail.key === 'MONTHLY' && ['chapters', 'gaps'].includes(activeTab))">
+            <div v-if="hasFocusContext && !focusNotFound" class="focus-banner">
+              <MapPin :size="14" />
+              <span>{{ focusSourceText }}</span>
+              <span v-if="isGisViewOnlyKpi" class="focus-banner__hint">GIS 来源仅用于查看</span>
+            </div>
+            <div v-else-if="hasFocusContext && focusNotFound" class="focus-banner focus-banner--warn">
+              <AlertTriangle :size="14" />
+              <span>{{ focusNotFoundText }}</span>
+            </div>
             <div class="detail-title">{{ detail.detailTitle }}</div>
             <div class="detail-table-wrapper">
               <table class="detail-table">
@@ -1631,7 +1736,20 @@ onUnmounted(() => {
                     <tr
                       v-for="(row, ri) in (detail.key === 'S02' ? filteredS02DetailData : detail.key === 'E02' ? e02FilteredDetailData : detail.key === 'MONTHLY' ? filteredMonthlyDetailData : detail.detailData)"
                       :key="ri"
-                      :class="{ 'row-selected': (detail.key === 'E02' && e02SelectedRow === ri) || (detail.key === 'E04' && e04SelectedRow === ri) }"
+                      :ref="el => {
+                        if (
+                          (detail.key === 'E02' && e02FocusedIndex === ri) ||
+                          (detail.key === 'S02' && s02FocusedIndex === ri)
+                        ) {
+                          focusRowRef = el as HTMLTableRowElement | null
+                        }
+                      }"
+                      :class="{
+                        'row-selected': (detail.key === 'E02' && e02SelectedRow === ri) || (detail.key === 'E04' && e04SelectedRow === ri),
+                        'row-focused':
+                          (detail.key === 'E02' && hasFocusContext && e02FocusedIndex === ri) ||
+                          (detail.key === 'S02' && hasFocusContext && s02FocusedIndex === ri),
+                      }"
                       @click="detail.key === 'E02' && e02HandleRowClick(ri); detail.key === 'E04' && e04HandleRowClick(ri)"
                     >
                       <td
@@ -2032,6 +2150,7 @@ onUnmounted(() => {
           查看事项详情
         </button>
         <button
+          v-if="!isGisViewOnlyKpi"
           class="btn btn-primary"
           :style="detail.key === 'E02' || detail.key === 'E04' ? { background: '#2f9cff', borderColor: '#2f9cff' } : { background: themeColor, borderColor: themeColor }"
           :disabled="(detail.key === 'E02' && !e02CanSupervise) || (detail.key === 'E04' && !e04CanSupervise)"
@@ -2520,6 +2639,31 @@ onUnmounted(() => {
   gap: 8px;
   overflow: hidden;
 
+  .focus-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #2f9cff;
+    background: rgba(47, 156, 255, 0.08);
+    border: 1px solid rgba(47, 156, 255, 0.25);
+    border-radius: 3px;
+    flex-shrink: 0;
+
+    &--warn {
+      color: #ffb347;
+      background: rgba(255, 179, 71, 0.08);
+      border-color: rgba(255, 179, 71, 0.25);
+    }
+
+    &__hint {
+      margin-left: auto;
+      font-size: 10px;
+      opacity: 0.7;
+    }
+  }
+
   .detail-title {
     font-size: 13px;
     font-weight: 600;
@@ -2573,6 +2717,18 @@ onUnmounted(() => {
     tr.row-selected td {
       background: rgba(47, 156, 255, 0.12) !important;
       box-shadow: inset 2px 0 0 #2f9cff;
+    }
+
+    // GIS 关联定位高亮
+    tr.row-focused td {
+      background: rgba(47, 156, 255, 0.18) !important;
+      box-shadow: inset 3px 0 0 #2f9cff, 0 0 12px rgba(47, 156, 255, 0.25);
+      animation: focusRowGlow 1.6s ease-out;
+    }
+
+    @keyframes focusRowGlow {
+      0% { background: rgba(47, 156, 255, 0.35) !important; }
+      100% { background: rgba(47, 156, 255, 0.18) !important; }
     }
 
     .status-tag {

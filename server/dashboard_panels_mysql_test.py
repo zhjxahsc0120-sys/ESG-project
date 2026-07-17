@@ -41,13 +41,16 @@ def main() -> int:
 
     assert_true(metric_value(carbon.get("metrics", []), "施工阶段累计碳足迹") == 12856, "carbon total mismatch")
     assert_true(metric_value(carbon.get("metrics", []), "累计核算减排量") == 1445, "carbon reduction mismatch")
-    assert_true(len(carbon.get("sources", [])) == 3, "carbon source count mismatch")
+    assert_true(len(carbon.get("sources", [])) == 4, "carbon source count mismatch")
+    assert_true(any(item.get("name") == "其他" for item in carbon.get("sources", [])), "carbon other source missing")
     assert_true(len(carbon.get("reductions", [])) >= 4, "carbon reductions count mismatch")
 
     assert_true(monthly.get("month") == "2026年7月", "monthly period mismatch")
     assert_true(monthly.get("progress") == 82, "monthly progress mismatch")
     assert_true(monthly.get("pendingCount") == 6, "monthly pending count mismatch")
     assert_true(monthly.get("confirmCount") == 4, "monthly confirm count mismatch")
+    assert_true(monthly.get("currentStatus") == "报告编制", "monthly current status mismatch")
+    assert_true(monthly.get("expectedCompletion") == "7月12日", "monthly expected completion mismatch")
     assert_true(len(monthly.get("materials", [])) == 6, "monthly materials count mismatch")
 
     print("[PASS] 首页右侧三块面板 MySQL 业务表聚合验收通过。")

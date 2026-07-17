@@ -244,6 +244,8 @@ type S01Data = {
   currentStage: string
   currentStageDetail: string
   countingStatus: string
+  latestInterruptDate?: string
+  latestInterruptReason?: string
   updateTime: string
   timeline: {
     startLabel: string
@@ -258,6 +260,8 @@ type S01Data = {
     name: string
     status: string
     detail?: string
+    startDate?: string
+    endDate?: string
   }[]
   conclusion: string
 }

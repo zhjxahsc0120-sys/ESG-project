@@ -19,16 +19,16 @@ const store = useDashboardStore()
         <div class="status-blocks">
           <div class="status-block">
             <Activity class="status-icon" />
-            <span>当前状态</span>
+            <span>当前状态：{{ store.monthly.currentStatus || '报告编制' }}</span>
           </div>
           <div class="status-block">
             <CheckCircle class="status-icon" />
-            <span>预计算完成 7 月 12 日</span>
+            <span>预计完成 {{ store.monthly.expectedCompletion || '7月12日' }}</span>
           </div>
         </div>
       </div>
       <div class="materials-section">
-        <div class="materials-title">待补资料清单（示例）</div>
+        <div class="materials-title">待补资料清单</div>
         <table class="materials-table">
           <thead>
             <tr>
