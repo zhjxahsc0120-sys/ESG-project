@@ -190,7 +190,7 @@ def seed_minimal_trace_and_jobs() -> None:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 [
-                    (670001, "E01", "EVENT_TRIGGER", "env_monitoring_record", "410002", "SUCCESS", "2026-07", "2026-07-13 10:00:00", "2026-07-13 10:00:02", 2, json.dumps({"当前超标项": 2, "扬尘": 1, "噪声": 1}, ensure_ascii=False)),
+                    (670001, "E01", "EVENT_TRIGGER", "env_monitoring_record", "410002", "SUCCESS", "2026-07", "2026-07-13 10:00:00", "2026-07-13 10:00:02", 2, json.dumps({"本月超标项次": 2, "扬尘": 1, "噪声": 1}, ensure_ascii=False)),
                     (670002, "G02", "SCHEDULED", "permit_record", None, "SUCCESS", "2026-07", "2026-07-13 09:00:00", "2026-07-13 09:00:02", 5, json.dumps({"临期许可": 4, "逾期许可": 1, "30日内到期": 4}, ensure_ascii=False)),
                 ],
             )
@@ -226,4 +226,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

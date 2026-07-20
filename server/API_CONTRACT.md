@@ -215,7 +215,7 @@ GET /api/workspace/reviews/{reviewId}/requirements
 }
 ```
 
-当前目标：支撑已完成前端页面从 mock 数据逐步切到 API。  
+当前目标：支撑已完成前端页面从 mock 数据逐步切到 API。
 约束：前端接入时保留 mock fallback；后端不可用时页面不得空白。
 
 当前联调基线、关键数据口径与回归命令详见：
@@ -259,10 +259,10 @@ GET /api/dashboard/kpis
       "items": [
         {
           "key": "E01",
-          "label": "环境监测超标",
-          "fullName": "环境监测超标项",
+          "label": "环境监测超标项次",
+          "fullName": "环境监测超标项次",
           "value": 2,
-          "unit": "项"
+          "unit": "项次"
         }
       ]
     }

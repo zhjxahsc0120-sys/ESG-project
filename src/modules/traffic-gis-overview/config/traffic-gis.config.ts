@@ -15,10 +15,10 @@ export const trafficGisConfig = {
   basemap: {
     url:
       import.meta.env.VITE_TRAFFIC_BASEMAP_URL ||
-      "https://tile.openstreetmap.org/",
-    brightness: 1,
-    contrast: 0.96,
-    saturation: 0.72,
+      "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+    brightness: 0.9,
+    contrast: 1.08,
+    saturation: 0.9,
   },
   lod: { labelMaxHeight: 55000, pointMaxHeight: 120000 },
 };

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import WorkspaceNav from '@/components/workspace/WorkspaceNav.vue'
 import WorkspaceHome from '@/components/workspace/WorkspaceHome.vue'
 import WorkspaceTasks from '@/components/workspace/WorkspaceTasks.vue'
@@ -10,10 +11,18 @@ import TaskModal from '@/components/workspace/TaskModal.vue'
 import { uploadTasks } from '@/data/workspace.mock'
 import type { UploadTask } from '@/types/workspace'
 
+const route = useRoute()
 const activeNav = ref('workspace')
 const selectedStatus = ref('')
 const selectedTaskId = ref<string | null>(null)
 const forceTab = ref<string>('')
+
+onMounted(() => {
+  const t = route.query.t as string | undefined
+  if (t && ['workspace', 'tasks', 'smart-upload', 'review', 'documents'].includes(t)) {
+    activeNav.value = t
+  }
+})
 
 const currentTask = computed(() => {
   if (!selectedTaskId.value) return null
@@ -54,7 +63,7 @@ function handleCloseModal() {
 <template>
   <div class="workspace-page">
     <WorkspaceNav :active-nav="activeNav" @navigate="handleNavigate" />
-    
+
     <main class="workspace-main">
       <WorkspaceHome
         v-if="activeNav === 'workspace'"

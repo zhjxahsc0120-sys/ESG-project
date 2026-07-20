@@ -64,6 +64,7 @@ export type EffectivenessItem = {
 export type CarbonSource = {
   name: string
   value: number
+  color?: string
 }
 
 export type ReductionMeasure = {
@@ -82,6 +83,8 @@ export type MonthlyReport = {
   progress: number
   pendingCount: number
   confirmCount: number
+  currentStatus?: string
+  expectedCompletion?: string
   materials: MonthlyMaterial[]
 }
 
@@ -90,6 +93,14 @@ export type TimelineStep = {
   label: string
   active?: boolean
   completed?: boolean
+}
+
+export interface KpiModalFocusContext {
+  sourceTable?: string
+  sourceId?: string
+  gisFeatureId?: string
+  from?: 'gis' | 'dashboard' | 'workspace'
+  title?: string
 }
 
 // ── 弹窗详情类型 ──
@@ -103,7 +114,82 @@ export type KpiDetailSummaryItem = {
 }
 
 export type KpiDetailBottomItem = {
-  [key: string]: string | number
+  [key: string]: string | number | boolean | null | undefined | KpiDetailBottomItem[]
+}
+
+export type E02MainStatus = '整改中' | '待复查' | '待销项'
+export type E02DeadlineStatus = '已逾期' | '正常'
+
+export type E02DetailRow = KpiDetailBottomItem & {
+  id: string
+  rawId: number
+  category: string
+  name: string
+  time: string
+  level: string
+  department: string
+  deadline: string
+  mainStatus: E02MainStatus
+  overdue: boolean
+  deadlineStatus: E02DeadlineStatus
+  status?: string
+}
+
+export type E03DeadlineStatus = '已逾期' | '正常'
+export type E03MainStatus = '未闭环' | '待整改' | '整改中'
+
+export type E03DetailRow = KpiDetailBottomItem & {
+  id: number
+  name: string
+  segment: string
+  category: string
+  time: string
+  department: string
+  deadline: string
+  mainStatus: E03MainStatus
+  overdue: boolean
+  deadlineStatus: E03DeadlineStatus
+  statusStageKnown: boolean
+}
+
+export type E04MonthlyEmission = {
+  period: string
+  monthlyEmission: number
+  cumulativeEmission: number
+}
+
+export type E04MaterialDetail = KpiDetailBottomItem & {
+  material: string
+  activityValue: number
+  activityUnit: string
+  emissionFactor: number
+  factorUnit: string
+  emission: number
+  factorName: string
+  factorVersion: string
+  factorSource: string
+  dataNature: 'demo'
+  verificationStatus: '待业务核验'
+  evidenceStatus: string
+  monthlyData?: { period: string; activityValue: number; emission: number }[]
+}
+
+export type E04SourceDetail = KpiDetailBottomItem & {
+  sourceCode: 'diesel' | 'electricity' | 'material' | 'transport'
+  source: string
+  activityValue: number
+  activityUnit: string
+  emissionFactor: number | null
+  factorUnit: string
+  factorName: string
+  emission: number
+  share: number
+  factorVersion: string
+  factorSource: string
+  dataNature: 'demo'
+  verificationStatus: '待业务核验'
+  evidenceStatus: string
+  materialDetails?: E04MaterialDetail[]
 }
 
 export type TopicTab = {
@@ -132,4 +218,11 @@ export type KpiDetailConfig = {
   tabs?: TopicTab[]
   topicData?: Record<string, any>
   categoryData?: { name: string; value: number }[]
+  statusData?: { name: string; value: number }[]
+  statisticsAsOf?: string
+  monthlyData?: E04MonthlyEmission[]
+  materialDetails?: E04MaterialDetail[]
+  accountingBoundary?: string[]
+  demoNotice?: string
+  dataNature?: string
 }

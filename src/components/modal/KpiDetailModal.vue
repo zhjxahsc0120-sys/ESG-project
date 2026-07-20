@@ -2,24 +2,49 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
 import { X, AlertTriangle, ShieldCheck, FileCheck, Clock, MapPin } from 'lucide-vue-next'
-import type { KpiDetailConfig, KpiDetailBottomItem, TopicTab } from '@/types/dashboard'
+import type {
+  KpiDetailConfig,
+  KpiDetailBottomItem,
+  TopicTab,
+  KpiModalFocusContext,
+  E02DetailRow,
+  E02MainStatus,
+  E03DetailRow,
+} from '@/types/dashboard'
 import { carbonTabData, monthlyTabData } from '@/data/dashboard.mock'
 import S01SafetyProductionModal from './S01SafetyProductionModal.vue'
+import S02SafetyRiskModal from './S02SafetyRiskModal.vue'
+import S03LaborDisputeModal from './S03LaborDisputeModal.vue'
+import S04MassAppealModal from './S04MassAppealModal.vue'
+import G01ApprovalModal from './G01ApprovalModal.vue'
+import G02LicenseModal from './G02LicenseModal.vue'
+import G03RectificationModal from './G03RectificationModal.vue'
+import G04ComplianceModal from './G04ComplianceModal.vue'
+import E04CarbonEmissionModal from './E04CarbonEmissionModal.vue'
+import CarbonBenefitModal from './CarbonBenefitModal.vue'
+import MonthlyReportModal from './MonthlyReportModal.vue'
 
 const props = defineProps<{
   detail: KpiDetailConfig
+  focusContext?: KpiModalFocusContext | null
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
+const isAcceptanceMode = new URLSearchParams(window.location.search).get('acceptance') === '1'
+
 const modalRef = ref<HTMLDivElement | null>(null)
 const chartRef = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 
 const showSuperviseToast = ref(false)
+const superviseToastMessage = ref('督办功能为原型预留，尚未接入业务流程')
 let superviseTimer: ReturnType<typeof setTimeout> | null = null
+
+const focusRowRef = ref<HTMLTableRowElement | null>(null)
+const focusScrollDone = ref(false)
 
 const themeColor = computed(() => {
   const map: Record<string, string> = {
@@ -32,6 +57,19 @@ const themeColor = computed(() => {
 
 // E01 筛选
 const e01Filter = ref('all')
+type E01Category = '扬尘' | '噪声' | '废水' | '地表水'
+type E01Status = '复测达标' | '待复测' | '复测中' | '复测仍超标'
+type E01DetailRow = KpiDetailBottomItem & {
+  id: string | number
+  category: E01Category
+  status: E01Status
+  point: string
+  factor: string
+  time: string
+}
+
+const e01StatusFilter = ref<E01Status | null>(null)
+const e01SelectedId = ref<string | number | null>(null)
 const e01Categories = [
   { key: 'all', label: '全部' },
   { key: 'wastewater', label: '废水' },
@@ -116,6 +154,149 @@ const e01HasData = computed(() => {
   return e01AvailableCategories.value.length > 1 || e01TrendData.all.some(v => v > 0)
 })
 
+const e01DetailRows = computed(() => {
+  if (props.detail.key !== 'E01') return []
+  return props.detail.detailData as E01DetailRow[]
+})
+
+const e01CategoryByFilter: Record<string, E01Category | null> = {
+  all: null,
+  dust: '扬尘',
+  noise: '噪声',
+  wastewater: '废水',
+  surface: '地表水',
+}
+
+const e01FilterByCategory: Record<E01Category, string> = {
+  '扬尘': 'dust',
+  '噪声': 'noise',
+  '废水': 'wastewater',
+  '地表水': 'surface',
+}
+
+const filteredE01DetailData = computed(() => {
+  const category = e01CategoryByFilter[e01Filter.value]
+  return e01DetailRows.value.filter(row =>
+    (!category || row.category === category) &&
+    (!e01StatusFilter.value || row.status === e01StatusFilter.value),
+  )
+})
+
+const e01DetailFilterSummary = computed(() => {
+  const categoryLabel = e01Filter.value === 'all'
+    ? '全部'
+    : (e01Categories.find(item => item.key === e01Filter.value)?.label ?? '全部')
+  const filterLabel = e01StatusFilter.value
+    ? (categoryLabel === '全部' ? e01StatusFilter.value : `${categoryLabel} / ${e01StatusFilter.value}`)
+    : categoryLabel
+  return `${filterLabel} · 共${filteredE01DetailData.value.length}条`
+})
+
+function isE01Actionable(row: E01DetailRow) {
+  return row.status === '待复测' || row.status === '复测仍超标'
+}
+
+const e01SelectedRow = computed(() =>
+  e01DetailRows.value.find(row => row.id === e01SelectedId.value) ?? null,
+)
+
+const e01CanSupervise = computed(() => Boolean(
+  e01SelectedRow.value && isE01Actionable(e01SelectedRow.value),
+))
+
+const e01SuperviseTitle = computed(() => {
+  const row = e01SelectedRow.value
+  if (!row) return '请先选择待复测或复测仍超标记录'
+  if (!isE01Actionable(row)) return '该记录已复测达标，无需督办'
+  return `对${row.point.replace(/\s+/g, '')}${row.factor.replace(/^扬尘\//, '')}记录发起督办`
+})
+
+function toggleE01Selection(row: E01DetailRow) {
+  if (!isE01Actionable(row)) return
+  e01SelectedId.value = e01SelectedId.value === row.id ? null : row.id
+}
+
+function toggleE01StatusFilter(status: E01Status, count: number) {
+  if (count <= 0) return
+  e01StatusFilter.value = e01StatusFilter.value === status ? null : status
+}
+
+function handleE01Reminder() {
+  const row = e01PendingReminder.value as E01DetailRow | null
+  if (!row || !isE01Actionable(row)) return
+  e01StatusFilter.value = null
+  e01Filter.value = e01FilterByCategory[row.category]
+  e01SelectedId.value = row.id
+  nextTick(() => {
+    const selectedRow = modalRef.value?.querySelector(`[data-e01-id="${String(row.id)}"]`)
+    selectedRow?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function handleE01ModalKeydown(event: KeyboardEvent) {
+  if (props.detail.key === 'E01' && event.key === 'Escape') {
+    event.stopPropagation()
+    emit('close')
+  }
+}
+
+const e01Scale = ref(1)
+const e02Scale = ref(1)
+const e03Scale = ref(1)
+
+function updateE01Scale() {
+  if (props.detail.key !== 'E01') return
+  e01Scale.value = Math.min(1, window.innerWidth / 1920, window.innerHeight / 1080)
+}
+
+function updateE02Scale() {
+  if (props.detail.key !== 'E02') return
+  e02Scale.value = Math.min(1, window.innerWidth / 1920, window.innerHeight / 1080)
+}
+
+function updateE03Scale() {
+  if (props.detail.key !== 'E03') return
+  e03Scale.value = Math.min(1, window.innerWidth / 1920, window.innerHeight / 1080)
+}
+
+function e01SummaryValue(label: string) {
+  const item = props.detail.summary.find(summaryItem => summaryItem.label === label)
+  return Number(item?.value ?? 0)
+}
+
+const e01MonthlyTotal = computed(() => e01SummaryValue('本月超标项次'))
+const e01CompletedCount = computed(() => e01SummaryValue('已完成复测'))
+const e01PendingCount = computed(() => e01SummaryValue('待复测'))
+const e01StillExceededCount = computed(() => e01SummaryValue('复测仍超标'))
+const e01CompletionRate = computed(() => {
+  if (e01MonthlyTotal.value <= 0) return 0
+  return Math.round((e01CompletedCount.value / e01MonthlyTotal.value) * 100)
+})
+
+const e01PendingReminder = computed(() => {
+  if (props.detail.key !== 'E01') return null
+  return props.detail.detailData.find(item => item.status === '待复测') ?? null
+})
+
+function summaryValueColor(item: KpiDetailConfig['summary'][number]) {
+  if (props.detail.key === 'E01') {
+    if (item.label === '待复测') return '#ffb347'
+    if (item.label === '复测仍超标') return Number(item.value) > 0 ? '#ff4f5e' : '#69e36f'
+    if (item.label === '已完成复测') return '#69e36f'
+  }
+  if (props.detail.key === 'E02' && item.label === '已逾期' && Number(item.value) > 0) return '#ff4f5e'
+  return themeColor.value
+}
+
+function e01StatusClass(status: unknown) {
+  const statusText = String(status ?? '')
+  if (statusText === '复测达标') return 'tag-green'
+  if (statusText === '待复测') return 'tag-orange'
+  if (statusText === '复测中') return 'tag-blue'
+  if (statusText === '复测仍超标') return 'tag-red'
+  return 'tag-green'
+}
+
 // 监听可用分类变化，确保选中类别始终有效
 watch(e01AvailableCategories, (newCats) => {
   const validKeys = newCats.map(c => c.key)
@@ -124,112 +305,148 @@ watch(e01AvailableCategories, (newCats) => {
   }
 }, { immediate: true })
 
-// E02 状态构成（动态计算，使用 mainStatus 避免逾期被计入主状态）
+const allE02Items = computed<E02DetailRow[]>(() =>
+  props.detail.key === 'E02' ? props.detail.detailData as E02DetailRow[] : [],
+)
+
+const e02StatusColors: Record<E02MainStatus, string> = {
+  '整改中': '#2f9cff',
+  '待复查': '#ffb347',
+  '待销项': '#69e36f',
+}
+
+// E02权威状态构成优先使用接口statusData，仅在回退数据缺失时从明细补齐。
 const e02StatusData = computed(() => {
-  const items = props.detail.key === 'E02' ? props.detail.detailData : []
-  const getStatus = (i: any) => i.mainStatus || i.status
-  const rectifying = items.filter(i => getStatus(i) === '整改中').length
-  const pendingReview = items.filter(i => getStatus(i) === '待复查').length
-  const pendingClose = items.filter(i => getStatus(i) === '待关闭' || getStatus(i) === '待销项').length
-  return [
-    { name: '整改中', value: rectifying, color: '#69e36f' },
-    { name: '待复查', value: pendingReview, color: '#2f9cff' },
-    { name: '待销项', value: pendingClose, color: '#ffb347' },
-  ]
+  const apiData = props.detail.key === 'E02' ? props.detail.statusData : undefined
+  const statuses: E02MainStatus[] = ['整改中', '待复查', '待销项']
+  return statuses.map(name => ({
+    name,
+    value: Number(apiData?.find(item => item.name === name)?.value ?? allE02Items.value.filter(row => row.mainStatus === name).length),
+    color: e02StatusColors[name],
+  }))
 })
 
-// E02 问题类型（动态计算，过滤0项）
-const e02TypeData = computed(() => {
-  if (props.detail.key !== 'E02') return []
-  const items = props.detail.detailData
-  const typeMap: Record<string, number> = {}
-  items.forEach(item => {
-    const cat = item.category as string
-    typeMap[cat] = (typeMap[cat] || 0) + 1
+const e02OverdueCount = computed(() => allE02Items.value.filter(row => row.overdue === true).length)
+
+function e02SummaryValue(label: string, fallback: number) {
+  return Number(props.detail.summary.find(item => item.label === label)?.value ?? fallback)
+}
+
+const e02SummaryCards = computed(() => [
+  { label: '当前未闭环', value: e02SummaryValue('当前未闭环', allE02Items.value.length), unit: '项', kind: 'all' as const },
+  { label: '整改中', value: e02SummaryValue('整改中', e02StatusData.value[0]?.value ?? 0), unit: '项', kind: 'main' as const, filterValue: '整改中' as E02MainStatus },
+  { label: '待复查', value: e02SummaryValue('待复查', e02StatusData.value[1]?.value ?? 0), unit: '项', kind: 'main' as const, filterValue: '待复查' as E02MainStatus },
+  { label: '待销项', value: e02SummaryValue('待销项', e02StatusData.value[2]?.value ?? 0), unit: '项', kind: 'main' as const, filterValue: '待销项' as E02MainStatus },
+  { label: '已逾期', value: e02SummaryValue('已逾期', e02OverdueCount.value), unit: '项', kind: 'overdue' as const },
+])
+
+const mainStatusFilter = ref<E02MainStatus | null>(null)
+const categoryFilter = ref<string | null>(null)
+const overdueOnly = ref(false)
+const e02SelectedId = ref<string | null>(null)
+
+const e02HasFilters = computed(() => Boolean(mainStatusFilter.value || categoryFilter.value || overdueOnly.value))
+
+const filteredE02Items = computed(() => allE02Items.value.filter(row =>
+  (!mainStatusFilter.value || row.mainStatus === mainStatusFilter.value) &&
+  (!categoryFilter.value || row.category === categoryFilter.value) &&
+  (!overdueOnly.value || row.overdue === true),
+))
+
+// 类型列表不预先应用categoryFilter，保留同一主状态/逾期范围内的类型切换能力。
+const e02TypeScopeItems = computed(() => allE02Items.value.filter(row =>
+  (!mainStatusFilter.value || row.mainStatus === mainStatusFilter.value) &&
+  (!overdueOnly.value || row.overdue === true),
+))
+
+function aggregateE02Items(items: E02DetailRow[], field: 'category' | 'department') {
+  const counts = new Map<string, number>()
+  items.forEach(row => {
+    const key = row[field]
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1)
   })
-  return Object.entries(typeMap)
-    .map(([name, value]) => ({ name, value }))
-    .filter(t => t.value > 0)
-})
-
-// E02 时限状态计算
-function getE02DeadlineStatus(deadline: string): { type: string; text: string } {
-  const deadlineDate = new Date(deadline)
-  const now = new Date('2026-07-14')
-  const diffDays = Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  if (diffDays < 0) return { type: 'overdue', text: `逾期${Math.abs(diffDays)}天` }
-  if (diffDays === 0) return { type: 'warning', text: '今日到期' }
-  if (diffDays <= 3) return { type: 'warning', text: `临期${diffDays}天` }
-  return { type: 'normal', text: '正常' }
+  return Array.from(counts, ([name, value]) => ({ name, value }))
 }
 
-// E02 动态指标卡数据
-const e02OverdueCount = computed(() => {
-  if (props.detail.key !== 'E02') return 0
-  const now = new Date('2026-07-14')
-  return props.detail.detailData.filter(
-    item => item.status !== '已关闭' && new Date(item.deadline as string) < now
-  ).length
+const e02TypeData = computed(() => aggregateE02Items(e02TypeScopeItems.value, 'category'))
+
+const e02DepartmentData = computed(() =>
+  aggregateE02Items(filteredE02Items.value, 'department')
+    .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, 'zh-CN')),
+)
+
+const e02OverdueReminder = computed(() => filteredE02Items.value.find(row => row.overdue === true) ?? null)
+
+const e02FilterLabels = computed(() =>
+  [mainStatusFilter.value, categoryFilter.value, overdueOnly.value ? '已逾期' : null].filter((value): value is string => Boolean(value)),
+)
+
+const e02FilterSummary = computed(() => {
+  return `${e02FilterLabels.value.length > 0 ? e02FilterLabels.value.join(' / ') : '全部'} · 共${filteredE02Items.value.length}条`
 })
 
-const e02OverdueMessage = computed(() => {
-  return e02OverdueCount.value > 0
-    ? `${e02OverdueCount.value}项已超过整改期限`
-    : '当前无逾期未闭环事项'
+const e02ActiveFilterText = computed(() => e02FilterLabels.value.join(' / '))
+
+const e02HighlightedStatuses = computed(() => {
+  if (!e02HasFilters.value) return new Set<E02MainStatus>(['整改中', '待复查', '待销项'])
+  return new Set(filteredE02Items.value.map(row => row.mainStatus))
 })
 
-// E02 动态指标卡
-const e02SummaryCards = computed(() => {
-  if (props.detail.key !== 'E02') return []
-  const items = props.detail.detailData
-  const getStatus = (i: any) => i.mainStatus || i.status
-  const unresolved = items.filter(i => getStatus(i) !== '已关闭').length
-  const rectifying = items.filter(i => getStatus(i) === '整改中').length
-  const pendingReview = items.filter(i => getStatus(i) === '待复查').length
-  const pendingClose = items.filter(i => getStatus(i) === '待关闭' || getStatus(i) === '待销项').length
-  const overdue = e02OverdueCount.value
-  return [
-    { label: '当前未闭环事项', value: unresolved, unit: '项' },
-    { label: '整改中', value: rectifying, unit: '项', filterField: 'mainStatus', filterValue: '整改中' },
-    { label: '待复查', value: pendingReview, unit: '项', filterField: 'mainStatus', filterValue: '待复查' },
-    { label: '待销项', value: pendingClose, unit: '项', filterField: 'mainStatus', filterValue: '待销项' },
-    { label: '已逾期', value: overdue, unit: '项', filterField: 'overdue', filterValue: 'overdue' },
-  ]
-})
+const e02SelectedRow = computed(() => allE02Items.value.find(row => row.id === e02SelectedId.value) ?? null)
+const e02CanSupervise = computed(() => props.detail.key !== 'E02' || Boolean(e02SelectedRow.value))
+const e02ActionTitle = computed(() => e02SelectedRow.value ? `已选择“${e02SelectedRow.value.name}”` : '请先选择未闭环事项')
 
-// E02 筛选与行选择
-const e02TableFilter = ref<{ field: string; value: string } | null>(null)
-const e02SelectedRow = ref<number | null>(null)
+function clearE02Filters() {
+  mainStatusFilter.value = null
+  categoryFilter.value = null
+  overdueOnly.value = false
+  e02SelectedId.value = null
+}
 
-const e02FilteredDetailData = computed(() => {
-  if (props.detail.key !== 'E02') return []
-  const items = props.detail.detailData
-  if (!e02TableFilter.value) return items
-  const { field, value } = e02TableFilter.value
-  if (field === 'overdue') {
-    const now = new Date('2026-07-14')
-    return items.filter(item => new Date(item.deadline as string) < now && item.status !== '已关闭')
-  }
-  return items.filter(item => item[field as string] === value)
-})
-
-function e02ToggleFilter(field: string, value: string) {
-  if (e02TableFilter.value?.field === field && e02TableFilter.value?.value === value) {
-    e02TableFilter.value = null
+function activateE02Summary(item: (typeof e02SummaryCards.value)[number]) {
+  if (item.kind === 'all') {
+    clearE02Filters()
+  } else if (item.kind === 'main') {
+    mainStatusFilter.value = mainStatusFilter.value === item.filterValue ? null : item.filterValue
   } else {
-    e02TableFilter.value = { field, value }
+    overdueOnly.value = !overdueOnly.value
   }
 }
 
-function e02HandleRowClick(index: number) {
-  e02SelectedRow.value = e02SelectedRow.value === index ? null : index
+function e02ToggleMainStatus(status: E02MainStatus) {
+  mainStatusFilter.value = mainStatusFilter.value === status ? null : status
 }
 
-const e02CanSupervise = computed(() => {
-  if (props.detail.key !== 'E02') return true
-  if (e02SelectedRow.value === null) return false
-  const item = e02FilteredDetailData.value[e02SelectedRow.value]
-  return item && item.status !== '已关闭'
+function e02ToggleCategory(category: string) {
+  categoryFilter.value = categoryFilter.value === category ? null : category
+}
+
+function e02ToggleSelection(row: E02DetailRow) {
+  e02SelectedId.value = e02SelectedId.value === row.id ? null : row.id
+}
+
+function e02MainStatusClass(status: E02MainStatus) {
+  if (status === '整改中') return 'tag-blue'
+  if (status === '待复查') return 'tag-orange'
+  return 'tag-green'
+}
+
+function handleE02OverdueReminder() {
+  const row = e02OverdueReminder.value
+  if (!row) return
+  overdueOnly.value = true
+  e02SelectedId.value = row.id
+  nextTick(() => modalRef.value?.querySelector(`[data-e02-id="${row.id}"]`)?.scrollIntoView({ block: 'nearest' }))
+}
+
+function isE02SummaryActive(item: (typeof e02SummaryCards.value)[number]) {
+  if (item.kind === 'all') return !mainStatusFilter.value && !categoryFilter.value && !overdueOnly.value
+  if (item.kind === 'main') return mainStatusFilter.value === item.filterValue
+  return overdueOnly.value
+}
+
+watch(filteredE02Items, rows => {
+  if (e02SelectedId.value && !rows.some(row => row.id === e02SelectedId.value)) e02SelectedId.value = null
 })
 
 // E04 行选择与督办
@@ -246,81 +463,110 @@ const e04CanSupervise = computed(() => {
   return item && (item as any).attention !== '正常'
 })
 
-const s02Filter = ref('all')
-const s02Categories = [
-  { key: 'all', label: '全部' },
-  { key: 'major', label: '重大' },
-  { key: 'bigger', label: '较大' },
-  { key: 'near', label: '临近作业' },
-]
+// E03 真实明细筛选、聚合与选择
+type E03DeadlineFilter = 'normal' | 'overdue' | null
 
-const s02RiskPoints = [
-  { id: 1, x: 15, y: 58, level: '较大', label: '1', status: '正常管控' },
-  { id: 2, x: 28, y: 48, level: '重大', label: '2', status: '正常管控' },
-  { id: 3, x: 42, y: 42, level: '较大', label: '3', status: '临近关键作业' },
-  { id: 4, x: 55, y: 38, level: '较大', label: '4', status: '持续管控' },
-  { id: 5, x: 68, y: 34, level: '较大', label: '5', status: '正常管控' },
-  { id: 6, x: 78, y: 30, level: '较大', label: '6', status: '正常管控' },
-]
+const allE03Items = computed<E03DetailRow[]>(() =>
+  props.detail.key === 'E03' ? props.detail.detailData as E03DetailRow[] : [],
+)
+const e03DeadlineFilter = ref<E03DeadlineFilter>(null)
+const e03SegmentFilter = ref<string | null>(null)
+const e03CategoryFilter = ref<string | null>(null)
+const e03SelectedId = ref<number | null>(null)
 
-// S02 类型分布
-const s02TypeData = [
-  { name: '高边坡', value: 2 },
-  { name: '隧道', value: 1 },
-  { name: '架梁', value: 1 },
-  { name: '爆破', value: 1 },
-  { name: '交通导改', value: 1 },
-]
+const e03Segments = computed(() =>
+  Array.from(new Set(allE03Items.value.map(row => row.segment).filter(Boolean))),
+)
+const e03Categories = computed(() =>
+  Array.from(new Set(allE03Items.value.map(row => row.category).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'zh-CN')),
+)
+const e03HasFilters = computed(() => Boolean(e03DeadlineFilter.value || e03SegmentFilter.value || e03CategoryFilter.value))
+const filteredE03Items = computed(() => allE03Items.value.filter(row =>
+  (!e03DeadlineFilter.value || (e03DeadlineFilter.value === 'overdue' ? row.overdue : !row.overdue)) &&
+  (!e03SegmentFilter.value || row.segment === e03SegmentFilter.value) &&
+  (!e03CategoryFilter.value || row.category === e03CategoryFilter.value),
+))
 
-// S02 治理关注点
-const s02ConcernData = [
-  { name: '措施缺失', value: 1 },
-  { name: '长期未复核', value: 1 },
-]
+function aggregateE03Items(items: E03DetailRow[], field: 'category' | 'department') {
+  const counts = new Map<string, number>()
+  items.forEach(row => {
+    const value = row[field]
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1)
+  })
+  return Array.from(counts, ([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, 'zh-CN'))
+}
 
-// G02 到期分桶
-const g02BucketData = [
-  { name: '已逾期', value: 1, color: '#ff4f5e' },
-  { name: '7日内', value: 1, color: '#ffb347' },
-  { name: '8-15日', value: 1, color: '#a66cff' },
-  { name: '16-30日', value: 2, color: '#a66cff' },
-  { name: '30日以上', value: 0, color: '#2f9cff' },
-]
+const e03SegmentData = computed(() => e03Segments.value.map(section => {
+  const rows = allE03Items.value.filter(row => row.segment === section)
+  const overdue = rows.filter(row => row.overdue).length
+  return { section, normal: rows.length - overdue, overdue, total: rows.length }
+}))
+const e03TypeData = computed(() => aggregateE03Items(filteredE03Items.value, 'category'))
+const e03DepartmentData = computed(() => aggregateE03Items(filteredE03Items.value, 'department'))
+const e03OverdueRows = computed(() => filteredE03Items.value
+  .filter(row => row.overdue)
+  .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.id - b.id))
+const e03OverdueReminder = computed(() => e03OverdueRows.value[0] ?? null)
+const e03OtherOverdueCount = computed(() => Math.max(0, e03OverdueRows.value.length - 1))
+const e03SelectedRow = computed(() => allE03Items.value.find(row => row.id === e03SelectedId.value) ?? null)
+const e03CanOperate = computed(() => Boolean(e03SelectedRow.value))
+const e03FilterLabels = computed(() => [
+  e03DeadlineFilter.value === 'overdue' ? '已逾期' : e03DeadlineFilter.value === 'normal' ? '正常' : null,
+  e03SegmentFilter.value,
+  e03CategoryFilter.value,
+].filter((value): value is string => Boolean(value)))
+const e03FilterSummary = computed(() =>
+  `${e03FilterLabels.value.length ? e03FilterLabels.value.join(' / ') : '全部'} · 共${filteredE03Items.value.length}条`,
+)
+const e03HighlightedSegments = computed(() => {
+  if (!e03HasFilters.value) return new Set(e03Segments.value)
+  return new Set(filteredE03Items.value.map(row => row.segment))
+})
 
-// G02 预警摘要
-const g02WarningData = [
-  { name: '夜间施工许可', value: 1 },
-  { name: '临时用地许可', value: 1 },
-  { name: '爆破作业许可', value: 1 },
-  { name: '特种设备许可', value: 1 },
-  { name: '临时用电许可', value: 1 },
-]
+function clearE03Filters() {
+  e03DeadlineFilter.value = null
+  e03SegmentFilter.value = null
+  e03CategoryFilter.value = null
+  e03SelectedId.value = null
+}
 
-// E03 问题类型分布
-const e03TypeData = [
-  { name: '截排水', value: 2, color: '#69e36f' },
-  { name: '边坡防护', value: 2, color: '#2f9cff' },
-  { name: '沉沙设施', value: 1, color: '#00e5ff' },
-  { name: '弃渣场', value: 1, color: '#ffb347' },
-  { name: '临时占地', value: 1, color: '#a66cff' },
-]
+function toggleE03DeadlineFilter(value: Exclude<E03DeadlineFilter, null> | 'all') {
+  e03DeadlineFilter.value = value === 'all' ? null : e03DeadlineFilter.value === value ? null : value
+}
 
-// E03 工点风险点
-const e03WorkPoints = [
-  { id: 1, x: 15, y: 58, label: '1', count: 2, risk: 'high' },
-  { id: 2, x: 28, y: 48, label: '2', count: 2, risk: 'high' },
-  { id: 3, x: 42, y: 42, label: '3', count: 1, risk: 'normal' },
-  { id: 4, x: 55, y: 38, label: '4', count: 1, risk: 'normal' },
-  { id: 5, x: 68, y: 34, label: '5', count: 1, risk: 'normal' },
-]
+function toggleE03SegmentFilter(value: string | null) {
+  e03SegmentFilter.value = e03SegmentFilter.value === value ? null : value
+}
 
-// E03 风险摘要
-const e03RiskSummary = [
-  { name: '汛期高风险（项）', value: 2 },
-  { name: '可能影响行洪（项）', value: 1 },
-  { name: '可能造成水土流失（项）', value: 3 },
-  { name: '一般风险（项）', value: 1 },
-]
+function toggleE03CategoryFilter(value: string | null) {
+  e03CategoryFilter.value = e03CategoryFilter.value === value ? null : value
+}
+
+function toggleE03Selection(row: E03DetailRow) {
+  e03SelectedId.value = e03SelectedId.value === row.id ? null : row.id
+}
+
+function e03MainStatusClass(status: E03DetailRow['mainStatus']) {
+  if (status === '整改中') return 'tag-blue'
+  if (status === '待整改') return 'tag-orange'
+  return 'tag-normal'
+}
+
+function handleE03OverdueReminder() {
+  const row = e03OverdueReminder.value
+  if (!row) return
+  e03DeadlineFilter.value = 'overdue'
+  e03SegmentFilter.value = row.segment
+  e03CategoryFilter.value = null
+  e03SelectedId.value = row.id
+  nextTick(() => modalRef.value?.querySelector(`[data-e03-id="${row.id}"]`)?.scrollIntoView({ block: 'nearest' }))
+}
+
+watch(filteredE03Items, rows => {
+  if (e03SelectedId.value !== null && !rows.some(row => row.id === e03SelectedId.value)) e03SelectedId.value = null
+})
 
 // E04 时间范围筛选
 const e04TimeRange = ref('6m')
@@ -380,23 +626,6 @@ const s01Rules = [
   '停工期是否计入连续天数，按项目确认口径执行',
 ]
 
-// G04 问题构成
-const g04ProblemData = [
-  { name: '资料缺失', value: 1, color: '#a66cff' },
-  { name: '已失效', value: 1, color: '#ff4f5e' },
-  { name: '未签章', value: 1, color: '#ffb347' },
-  { name: '未归档', value: 0, color: '#2f9cff' },
-  { name: '版本不一致', value: 1, color: '#69e36f' },
-]
-
-// G04 节点影响
-const g04NodeImpact = [
-  { name: '开工报审', value: 1 },
-  { name: '阶段验收', value: 1 },
-  { name: '月报编制', value: 1 },
-  { name: '档案移交', value: 1 },
-]
-
 // S03 纠纷类型分布
 const s03TypeData = [
   { name: '工资支付', value: 2, color: '#2f9cff' },
@@ -409,50 +638,6 @@ const s03RiskData = [
   { name: '高风险', value: 1, color: '#ff4f5e' },
   { name: '中风险', value: 2, color: '#ffb347' },
   { name: '一般关注', value: 1, color: '#2f9cff' },
-]
-
-// S04 诉求类型分布
-const s04TypeData = [
-  { name: '通行影响', value: 1, color: '#2f9cff' },
-  { name: '施工扰民', value: 1, color: '#ffb347' },
-  { name: '征地协调', value: 1, color: '#a66cff' },
-]
-
-// S04 沿线位置点
-const s04LocationPoints = [
-  { id: 1, x: 28, y: 48, label: 'K24', type: 'passage' },
-  { id: 2, x: 55, y: 38, label: 'K48', type: 'noise' },
-  { id: 3, x: 68, y: 34, label: 'K61', type: 'land' },
-]
-
-// G01 办理状态构成
-const g01StatusData = [
-  { name: '尚未报审', value: 1, color: '#8fa9c8' },
-  { name: '材料补正', value: 1, color: '#ffb347' },
-  { name: '审批中', value: 3, color: '#a66cff' },
-]
-
-// G01 受影响节点
-const g01NodeImpact = [
-  { name: '开工报审', value: 1 },
-  { name: '专项施工', value: 2 },
-  { name: '阶段验收', value: 2 },
-]
-
-// G03 整改状态构成
-const g03StatusData = [
-  { name: '整改中', value: 1, color: '#2f9cff' },
-  { name: '逾期整改', value: 2, color: '#ff4f5e' },
-  { name: '待复查', value: 2, color: '#ffb347' },
-  { name: '复查未通过', value: 1, color: '#a66cff' },
-]
-
-// G03 检查来源分布
-const g03SourceData = [
-  { name: '监理检查', value: 2 },
-  { name: '项目检查', value: 2 },
-  { name: '审计检查', value: 1 },
-  { name: '主管部门检查', value: 1 },
 ]
 
 // 专题标签页
@@ -475,24 +660,63 @@ const monthlyGroupFilter = ref('all')
 
 const currentChartType = computed(() => props.detail.key)
 
-const filteredS02RiskPoints = computed(() => {
-  const filter = s02Filter.value
-  if (filter === 'all') return s02RiskPoints
-  if (filter === 'major') return s02RiskPoints.filter(p => p.level === '重大')
-  if (filter === 'bigger') return s02RiskPoints.filter(p => p.level === '较大')
-  if (filter === 'near') return s02RiskPoints.filter(p => p.status === '临近关键作业')
-  return s02RiskPoints
+function findFocusedRowIndex(rows: KpiDetailBottomItem[]): number {
+  const ctx = props.focusContext
+  if (!ctx) return -1
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] as any
+    if (ctx.sourceId && row.sourceId === ctx.sourceId) return i
+    if (ctx.sourceId && row.id === ctx.sourceId) return i
+  }
+  if (ctx.gisFeatureId) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as any
+      if (row.gisFeatureId === ctx.gisFeatureId) return i
+    }
+  }
+  return -1
+}
+
+const hasFocusContext = computed(() => {
+  const ctx = props.focusContext
+  if (!ctx) return false
+  if (props.detail.key !== 'E02') return false
+  return !!(ctx.sourceId || ctx.gisFeatureId)
 })
 
-const filteredS02DetailData = computed(() => {
-  const filter = s02Filter.value
-  if (!props.detail.detailData) return []
-  if (filter === 'all') return props.detail.detailData
-  if (filter === 'major') return props.detail.detailData.filter((d: any) => d.level === '重大')
-  if (filter === 'bigger') return props.detail.detailData.filter((d: any) => d.level === '较大')
-  if (filter === 'near') return props.detail.detailData.filter((d: any) => d.status === '临近关键作业')
-  return props.detail.detailData
+const e02FocusedIndex = computed(() => {
+  if (!hasFocusContext.value || props.detail.key !== 'E02') return -1
+  return findFocusedRowIndex(filteredE02Items.value)
 })
+
+const focusNotFound = computed(() => {
+  if (!hasFocusContext.value) return false
+  if (props.detail.key === 'E02') return e02FocusedIndex.value === -1
+  return false
+})
+
+const focusSourceText = computed(() => {
+  const ctx = props.focusContext
+  if (!ctx) return ''
+  const key = props.detail.key
+  if (ctx.title) {
+    if (key === 'E02') return `已从 GIS 地图定位到：${ctx.title}`
+    return `已从 GIS 地图定位到：${ctx.title}`
+  }
+  if (ctx.sourceId) {
+    if (key === 'E02') return `已从 GIS 地图定位到关联环保问题：${ctx.sourceId}`
+  }
+  return '已从 GIS 地图定位到关联记录'
+})
+
+const focusNotFoundText = computed(() => {
+  return '已打开对应指标弹窗，但未在当前明细中找到该 GIS 关联记录。'
+})
+
+const isFromGis = computed(() => props.focusContext?.from === 'gis')
+const isGisViewOnlyKpi = computed(() =>
+  isFromGis.value && props.detail.key === 'E02',
+)
 
 const filteredMonthlyDetailData = computed(() => {
   if (!props.detail.detailData) return []
@@ -511,11 +735,14 @@ function initChart() {
   chart = echarts.init(chartRef.value)
   // E02 图表柱状条点击筛选
   chart.on('click', (params: { name?: string }) => {
-    if (props.detail.key !== 'E02') return
     if (!params.name) return
-    const statusName = params.name
-    if (['整改中', '待复查', '待关闭', '待销项'].includes(statusName)) {
-      e02ToggleFilter('mainStatus', statusName)
+    if (props.detail.key === 'E02') {
+      const statusName = params.name
+      if (['整改中', '待复查', '待关闭', '待销项'].includes(statusName)) {
+        e02ToggleMainStatus(statusName === '待关闭' ? '待销项' : statusName as E02MainStatus)
+      }
+    } else if (props.detail.key === 'E03' && e03Segments.value.includes(params.name)) {
+      toggleE03SegmentFilter(params.name)
     }
   })
   updateChart()
@@ -687,6 +914,17 @@ function updateChart() {
           },
         })
       })
+      series.push({
+        id: 'line-total',
+        type: 'line',
+        name: '合计',
+        data: e01TrendData.all,
+        symbol: 'circle',
+        symbolSize: 6,
+        lineStyle: { color: '#f4edc4', width: 2 },
+        itemStyle: { color: '#fff8d6', borderColor: '#f4edc4', borderWidth: 1 },
+        z: 5,
+      })
     } else {
       const catName = e01Categories.find(c => c.key === cat)?.label || ''
       const catColor = e01CatColors[cat] || themeColor.value
@@ -707,157 +945,174 @@ function updateChart() {
     }
 
     chart.setOption({
-      grid: { top: 20, right: 16, bottom: 28, left: 32 },
+      animation: !isAcceptanceMode,
+      grid: { top: 20, right: 16, bottom: 22, left: 32 },
       xAxis: {
         type: 'category',
         data: e01TrendData.months,
         axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
+        axisLabel: { color: '#8fa9c8', fontSize: 13, margin: 12 },
         axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
         minInterval: 1,
         axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
+        axisLabel: { color: '#8fa9c8', fontSize: 13 },
         splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
       },
       tooltip: {
         trigger: 'axis',
         backgroundColor: 'rgba(5,18,38,0.92)',
         borderColor: 'rgba(0,174,255,0.3)',
-        textStyle: { color: '#e8f3ff', fontSize: 12 }
+        textStyle: { color: '#e8f3ff', fontSize: 13 }
       },
       legend: {
-        show: cat === 'all' && series.length > 1,
-        bottom: 0,
-        textStyle: { color: '#8fa9c8', fontSize: 11 },
-        itemWidth: 14,
-        itemHeight: 8,
+        show: false,
       },
       series,
     }, { replaceMerge: ['series', 'legend'] })
   } else if (key === 'E02') {
     const statusData = e02StatusData.value
+    const highlightedStatuses = e02HighlightedStatuses.value
     const maxValue = Math.max(...statusData.map(d => d.value), 1)
     const xAxisMax = Math.ceil(maxValue * 1.3)
     chart.setOption({
+      animation: !isAcceptanceMode,
       grid: { top: 10, right: 20, bottom: 24, left: 70 },
       xAxis: {
         type: 'value',
         minInterval: 1,
         max: xAxisMax,
         axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
+        axisLabel: { color: '#8fa9c8', fontSize: 13 },
         splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
       },
       yAxis: {
         type: 'category',
         data: statusData.map(d => d.name),
         axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
+        axisLabel: { color: '#8fa9c8', fontSize: 13 },
         axisTick: { show: false },
       },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
+      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 13 } },
       series: [
         {
           type: 'bar',
-          data: statusData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
+          data: statusData.map(d => {
+            const opacity = highlightedStatuses.has(d.name) ? 1 : 0.3
+            return {
+              value: d.value,
+              itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0], opacity },
+              label: { opacity },
+            }
+          }),
           barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
-        },
-      ],
-    })
-  } else if (key === 'S02') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 5,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: s02TypeData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: s02TypeData.map(d => ({ value: d.value })),
-          barWidth: 8,
-          itemStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-              { offset: 0, color: 'rgba(47,156,255,0.3)' },
-              { offset: 1, color: '#2f9cff' },
-            ]),
-            borderRadius: [0, 4, 4, 0],
-          },
-        },
-      ],
-    })
-  } else if (key === 'G02') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 3,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: g02BucketData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: g02BucketData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
+          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 13 },
         },
       ],
     })
   } else if (key === 'E03') {
+    const segments = e03SegmentData.value
+    const opacityFor = (section: string) => e03HighlightedSegments.value.has(section) ? 1 : 0.28
+    const overdueColor = e03DeadlineFilter.value === 'overdue' ? '#ff4f5e' : '#d85f69'
     chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
+      animation: !isAcceptanceMode,
+      grid: { top: 18, right: 48, bottom: 28, left: 78 },
       xAxis: {
         type: 'value',
+        interval: 1,
         minInterval: 1,
-        max: 3,
+        max: Math.ceil(Math.max(...segments.map(item => item.total), 1)),
         axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
+        axisLabel: { color: '#8fa9c8', fontSize: 13, formatter: (value: number) => String(Math.round(value)) },
         splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
       },
       yAxis: {
         type: 'category',
-        data: e03TypeData.map(d => d.name),
+        inverse: true,
+        data: segments.map(item => item.section),
         axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
+        axisLabel: { color: '#b8cce3', fontSize: 13 },
         axisTick: { show: false },
       },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
+      legend: {
+        top: 0,
+        right: 8,
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { color: '#b8cce3', fontSize: 13 },
+        data: ['正常时限', '已逾期'],
+      },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: 'rgba(5,18,38,0.94)',
+        borderColor: 'rgba(105,227,111,0.3)',
+        textStyle: { color: '#e8f3ff', fontSize: 13 },
+        formatter: (params: Array<{ axisValue?: string }>) => {
+          const section = String(params[0]?.axisValue ?? '')
+          const item = segments.find(entry => entry.section === section)
+          if (!item) return section
+          return `${section}<br/>正常时限：${item.normal}项<br/>已逾期：${item.overdue}项<br/><strong>合计：${item.total}项</strong>`
+        },
+      },
       series: [
         {
+          name: '正常时限',
           type: 'bar',
-          data: e03TypeData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
+          stack: 'total',
+          barWidth: 18,
+          itemStyle: { color: '#69e36f' },
+          data: segments.map(item => ({
+            value: item.normal,
+            itemStyle: { color: '#69e36f', opacity: opacityFor(item.section), borderRadius: item.overdue ? [3, 0, 0, 3] : [3, 3, 3, 3] },
+            label: {
+              show: item.normal > 0,
+              position: 'inside',
+              color: '#062312',
+              fontSize: 13,
+              fontWeight: 700,
+              opacity: opacityFor(item.section),
+              formatter: item.normal > 0 ? String(item.normal) : '',
+            },
+          })),
+        },
+        {
+          name: '已逾期',
+          type: 'bar',
+          stack: 'total',
+          barWidth: 18,
+          itemStyle: { color: overdueColor },
+          data: segments.map(item => ({
+            value: item.overdue,
+            itemStyle: { color: overdueColor, opacity: opacityFor(item.section), borderRadius: [0, 3, 3, 0] },
+            label: {
+              show: item.overdue > 0,
+              position: 'inside',
+              color: '#ffffff',
+              fontSize: 13,
+              fontWeight: 700,
+              opacity: opacityFor(item.section),
+              formatter: item.overdue > 0 ? String(item.overdue) : '',
+            },
+          })),
+        },
+        {
+          name: '合计',
+          type: 'bar',
+          barGap: '-100%',
+          barWidth: 18,
+          silent: true,
+          tooltip: { show: false },
+          data: segments.map(item => ({
+            value: item.total,
+            itemStyle: { color: 'transparent' },
+            label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 13, fontWeight: 600, formatter: `${item.total}` },
+          })),
         },
       ],
-    })
+    }, true)
   } else if (key === 'E04') {
     const range = e04TimeRange.value
     const months = range === '6m' ? e04TrendData.months6 : e04TrendData.months12
@@ -952,34 +1207,6 @@ function updateChart() {
         },
       ],
     })
-  } else if (key === 'G04') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 3,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: g04ProblemData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: g04ProblemData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
-        },
-      ],
-    })
   } else if (key === 'S03') {
     chart.setOption({
       grid: { top: 10, right: 20, bottom: 24, left: 70 },
@@ -1008,94 +1235,13 @@ function updateChart() {
         },
       ],
     })
-  } else if (key === 'S04') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 3,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: s04TypeData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: s04TypeData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
-        },
-      ],
-    })
-  } else if (key === 'G01') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 70 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 4,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: g01StatusData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: g01StatusData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
-        },
-      ],
-    })
-  } else if (key === 'G03') {
-    chart.setOption({
-      grid: { top: 10, right: 20, bottom: 24, left: 80 },
-      xAxis: {
-        type: 'value',
-        minInterval: 1,
-        max: 3,
-        axisLine: { show: false },
-        axisLabel: { color: '#8fa9c8', fontSize: 11 },
-        splitLine: { lineStyle: { color: 'rgba(143,169,200,0.08)', type: 'dashed' } },
-      },
-      yAxis: {
-        type: 'category',
-        data: g03StatusData.map(d => d.name),
-        axisLine: { lineStyle: { color: 'rgba(143,169,200,0.2)' } },
-        axisLabel: { color: '#8fa9c8', fontSize: 12 },
-        axisTick: { show: false },
-      },
-      tooltip: { trigger: 'axis', backgroundColor: 'rgba(5,18,38,0.92)', borderColor: 'rgba(0,174,255,0.3)', textStyle: { color: '#e8f3ff', fontSize: 12 } },
-      series: [
-        {
-          type: 'bar',
-          data: g03StatusData.map(d => ({ value: d.value, itemStyle: { color: d.color, borderRadius: [0, 3, 3, 0] } })),
-          barWidth: 12,
-          label: { show: true, position: 'right', color: '#e8f3ff', fontSize: 11 },
-        },
-      ],
-    })
   }
 }
 
 function handleResize() {
+  updateE01Scale()
+  updateE02Scale()
+  updateE03Scale()
   chart?.resize()
 }
 
@@ -1106,10 +1252,34 @@ function handleOverlayClick(e: MouseEvent) {
 }
 
 function handleDetailReserved() {
-  // 预留，不跳转
+  if (props.detail.key === 'E02' && e02SelectedRow.value) {
+    superviseToastMessage.value = `已选择“${e02SelectedRow.value.name}”，详情功能尚未接入。`
+  } else if (props.detail.key === 'E03' && e03SelectedRow.value) {
+    superviseToastMessage.value = `已选择“${e03SelectedRow.value.name}”，事项详情流程尚未接入。`
+  } else {
+    return
+  }
+  showTemporaryToast()
 }
 
 function handleSupervise() {
+  if (props.detail.key === 'E01') {
+    const row = e01SelectedRow.value
+    if (!row || !isE01Actionable(row)) return
+    superviseToastMessage.value = `已选择“${row.point.replace(/\s+/g, '')}—${row.factor}”。督办流程尚未接入。`
+  } else if (props.detail.key === 'E02') {
+    if (!e02SelectedRow.value) return
+    superviseToastMessage.value = `已选择“${e02SelectedRow.value.name}”。\n督办流程尚未接入。`
+  } else if (props.detail.key === 'E03') {
+    if (!e03SelectedRow.value) return
+    superviseToastMessage.value = `已选择“${e03SelectedRow.value.name}”，督办流程尚未接入。`
+  } else {
+    superviseToastMessage.value = '督办功能为原型预留，尚未接入业务流程'
+  }
+  showTemporaryToast()
+}
+
+function showTemporaryToast() {
   showSuperviseToast.value = true
   if (superviseTimer) {
     clearTimeout(superviseTimer)
@@ -1126,10 +1296,18 @@ watch(e01Filter, () => {
   }
 })
 
-watch(s02Filter, () => {
-  if (props.detail.key === 'S02') {
-    updateChart()
+watch(filteredE01DetailData, (rows) => {
+  if (e01SelectedId.value !== null && !rows.some(row => row.id === e01SelectedId.value)) {
+    e01SelectedId.value = null
   }
+})
+
+watch([mainStatusFilter, categoryFilter, overdueOnly], () => {
+  if (props.detail.key === 'E02') updateChart()
+})
+
+watch([e03DeadlineFilter, e03SegmentFilter, e03CategoryFilter], () => {
+  if (props.detail.key === 'E03') updateChart()
 })
 
 watch(e04TimeRange, () => {
@@ -1162,13 +1340,43 @@ watch(activeTab, () => {
 })
 
 watch(() => props.detail.key, () => {
+  focusScrollDone.value = false
+  updateE01Scale()
+  updateE02Scale()
+  updateE03Scale()
   nextTick(() => {
     initChart()
     modalRef.value?.focus()
   })
 })
 
+watch([hasFocusContext, e02FocusedIndex, () => props.detail.key], () => {
+  if (!hasFocusContext.value) return
+  const key = props.detail.key
+  if (key === 'E02') {
+    if (e02FocusedIndex.value === -1 && (mainStatusFilter.value || categoryFilter.value || overdueOnly.value)) {
+      mainStatusFilter.value = null
+      categoryFilter.value = null
+      overdueOnly.value = false
+    }
+  }
+}, { immediate: true })
+
+watch([e02FocusedIndex], () => {
+  if (!hasFocusContext.value || focusScrollDone.value) return
+  const idx = e02FocusedIndex.value
+  if (idx >= 0) {
+    nextTick(() => {
+      focusRowRef.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      focusScrollDone.value = true
+    })
+  }
+}, { immediate: true })
+
 onMounted(() => {
+  updateE01Scale()
+  updateE02Scale()
+  updateE03Scale()
   nextTick(() => {
     initChart()
     window.addEventListener('resize', handleResize)
@@ -1189,15 +1397,27 @@ onUnmounted(() => {
 
 <template>
   <S01SafetyProductionModal v-if="detail.key === 'S01'" @close="emit('close')" />
-  <div v-else class="kpi-modal-overlay" @click="handleOverlayClick">
+  <S02SafetyRiskModal v-else-if="detail.key === 'S02'" @close="emit('close')" />
+  <S03LaborDisputeModal v-else-if="detail.key === 'S03'" @close="emit('close')" />
+  <S04MassAppealModal v-else-if="detail.key === 'S04'" @close="emit('close')" />
+  <G01ApprovalModal v-else-if="detail.key === 'G01'" @close="emit('close')" />
+  <G02LicenseModal v-else-if="detail.key === 'G02'" @close="emit('close')" />
+  <G03RectificationModal v-else-if="detail.key === 'G03'" @close="emit('close')" />
+  <G04ComplianceModal v-else-if="detail.key === 'G04'" @close="emit('close')" />
+  <E04CarbonEmissionModal v-else-if="detail.key === 'E04'" :detail="detail" @close="emit('close')" />
+  <CarbonBenefitModal v-else-if="detail.key === 'CARBON'" :detail="detail" @close="emit('close')" />
+  <MonthlyReportModal v-else-if="detail.key === 'MONTHLY'" :detail="detail" @close="emit('close')" />
+  <div v-else class="kpi-modal-overlay" :class="{ 'e01-acceptance-overlay': detail.key === 'E01' && isAcceptanceMode, 'e02-acceptance-overlay': detail.key === 'E02' && isAcceptanceMode, 'e03-acceptance-overlay': detail.key === 'E03' && isAcceptanceMode }" @click="handleOverlayClick">
     <div
       ref="modalRef"
       class="kpi-modal"
-      :class="`theme-${detail.theme}`"
+      :class="[`theme-${detail.theme}`, { 'is-e01': detail.key === 'E01', 'is-e02': detail.key === 'E02', 'is-e03': detail.key === 'E03', 'is-acceptance': (detail.key === 'E01' || detail.key === 'E02' || detail.key === 'E03') && isAcceptanceMode }]"
+      :style="detail.key === 'E01' ? { '--e01-scale': e01Scale } : detail.key === 'E02' ? { '--e02-scale': e02Scale } : detail.key === 'E03' ? { '--e03-scale': e03Scale } : undefined"
       role="dialog"
       aria-modal="true"
       :aria-labelledby="`modal-title-${detail.key}`"
       tabindex="-1"
+      @keydown="handleE01ModalKeydown"
     >
       <!-- 标题栏 -->
       <div class="modal-header">
@@ -1225,24 +1445,33 @@ onUnmounted(() => {
 
       <!-- 顶部摘要指标 -->
       <div class="modal-summary">
-        <div
-          v-for="(item, idx) in (detail.key === 'E02' ? e02SummaryCards : detail.summary)"
-          :key="idx"
-          class="summary-card"
-          :class="{
-            clickable: detail.key === 'E02' && idx >= 1,
-            active: detail.key === 'E02' && e02TableFilter?.value === (item as any).filterValue,
-          }"
-          @click="detail.key === 'E02' && idx >= 1 && (item as any).filterField && e02ToggleFilter((item as any).filterField, (item as any).filterValue)"
-        >
-          <div class="summary-label">{{ item.label }}</div>
-          <div class="summary-value-row">
-            <span class="summary-value" :style="{ color: detail.key === 'E02' && item.label === '已逾期' && (item as any).value > 0 ? '#ff4f5e' : detail.key === 'E02' && item.label === '已逾期' ? themeColor : themeColor }">
-              {{ item.value }}
-            </span>
-            <span v-if="item.unit" class="summary-unit">{{ item.unit }}</span>
+        <template v-if="detail.key === 'E02'">
+          <button
+            v-for="item in e02SummaryCards"
+            :key="item.label"
+            type="button"
+            class="summary-card e02-summary-card"
+            :class="{ active: isE02SummaryActive(item) }"
+            @click="activateE02Summary(item)"
+          >
+            <div class="summary-label">{{ item.label }}</div>
+            <div class="summary-value-row">
+              <span class="summary-value" :style="{ color: summaryValueColor(item) }">{{ item.value }}</span>
+              <span class="summary-unit">{{ item.unit }}</span>
+            </div>
+          </button>
+        </template>
+        <template v-else>
+          <div v-for="(item, idx) in detail.summary" :key="idx" class="summary-card">
+            <div class="summary-label">{{ item.label }}</div>
+            <div class="summary-value-row">
+              <span class="summary-value" :style="{ color: summaryValueColor(item) }">
+                {{ item.value }}
+              </span>
+              <span v-if="item.unit" class="summary-unit">{{ item.unit }}</span>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <!-- E04 指标计算说明 -->
@@ -1292,18 +1521,6 @@ onUnmounted(() => {
                   {{ cat.label }}
                 </button>
               </div>
-              <!-- S02 筛选 -->
-              <div v-if="detail.key === 'S02'" class="chart-filters">
-                <button
-                  v-for="cat in s02Categories"
-                  :key="cat.key"
-                  class="filter-btn"
-                  :class="{ active: s02Filter === cat.key }"
-                  @click="s02Filter = cat.key"
-                >
-                  {{ cat.label }}
-                </button>
-              </div>
               <!-- E04 时间范围 -->
               <div v-if="detail.key === 'E04'" class="chart-filters">
                 <button
@@ -1316,78 +1533,46 @@ onUnmounted(() => {
                   {{ range.label }}
                 </button>
               </div>
+              <div v-if="detail.key === 'E02' && e02HasFilters" class="e02-active-filter">
+                <span>当前筛选：<strong>{{ e02ActiveFilterText }}</strong></span>
+                <span>共{{ filteredE02Items.length }}条</span>
+                <button type="button" @click="clearE02Filters">清除</button>
+              </div>
+              <div v-if="detail.key === 'E03' && e03HasFilters" class="e03-active-filter">
+                <span>当前筛选：<strong>{{ e03FilterLabels.join(' / ') }}</strong></span>
+                <span>共{{ filteredE03Items.length }}条</span>
+                <button type="button" @click="clearE03Filters">清除筛选</button>
+              </div>
               <!-- E01 图例 -->
               <div v-if="detail.key === 'E01' && e01Filter === 'all' && e01CompositionData.length > 1" class="chart-legend">
-                <span v-for="item in e01CompositionData" :key="item.name" class="legend-item">
-                  <i class="legend-dot" :style="{ background: item.color }"></i>{{ item.name }}
-                </span>
+                <span class="legend-item"><i class="legend-dot dust"></i>扬尘</span>
+                <span class="legend-item"><i class="legend-dot noise"></i>噪声</span>
+                <span class="legend-item"><i class="legend-dot line"></i>合计</span>
               </div>
+            </div>
+            <div v-if="detail.key === 'E02' && e02HasFilters && filteredE02Items.length === 0" class="e02-chart-empty">
+              当前筛选条件下无匹配事项
             </div>
 
-            <!-- S02 路线图 -->
-            <div v-if="detail.key === 'S02'" class="route-map-area">
-              <svg viewBox="0 0 100 50" preserveAspectRatio="none" class="route-svg">
-                <defs>
-                  <radialGradient id="s02MapGlow" cx="50%" cy="50%" r="65%">
-                    <stop offset="0%" stop-color="#0d2d4a" stop-opacity="0.9" />
-                    <stop offset="100%" stop-color="#020b18" stop-opacity="0" />
-                  </radialGradient>
-                </defs>
-                <rect width="100" height="50" fill="url(#s02MapGlow)" />
-                <!-- 路线 -->
-                <path
-                  d="M 5 42 Q 20 36 35 30 T 65 22 T 95 16"
-                  fill="none"
-                  stroke="rgba(47,156,255,0.6)"
-                  stroke-width="1"
-                />
-                <!-- 风险点 -->
-                <g v-for="p in filteredS02RiskPoints" :key="p.id" class="risk-point">
-                  <circle :cx="p.x" :cy="p.y" r="3" fill="none" :stroke="p.level === '重大' ? '#ff4f5e' : '#ffb347'" stroke-width="1" />
-                  <text :x="p.x" :y="p.y - 5" text-anchor="middle" :fill="p.level === '重大' ? '#ff4f5e' : '#ffb347'" font-size="4" font-weight="700">{{ p.label }}</text>
-                </g>
-                <!-- 罗盘 -->
-                <g transform="translate(92, 8)">
-                  <circle r="4" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="0.3" />
-                  <path d="M 0 -3.5 L 1 0 L 0 3.5 L -1 0 Z" fill="#ff4f5e" />
-                  <text y="-5" text-anchor="middle" fill="#e8f3ff" font-size="3">N</text>
-                </g>
-              </svg>
-              <!-- 图例 -->
-              <div class="route-legend">
-                <span class="legend-item"><i class="legend-dot major"></i>重大风险（1）</span>
-                <span class="legend-item"><i class="legend-dot bigger"></i>较大风险（5）</span>
+            <div v-if="detail.key === 'E03'" class="e03-filter-panel" aria-label="E03筛选条件">
+              <div class="e03-filter-group">
+                <span>时限状态</span>
+                <button type="button" :class="{ active: e03DeadlineFilter === null }" @click="e03DeadlineFilter = null">全部</button>
+                <button type="button" :class="{ active: e03DeadlineFilter === 'normal' }" @click="toggleE03DeadlineFilter('normal')">正常</button>
+                <button type="button" :class="{ active: e03DeadlineFilter === 'overdue' }" @click="toggleE03DeadlineFilter('overdue')">已逾期</button>
+              </div>
+              <div class="e03-filter-group">
+                <span>所属标段</span>
+                <button type="button" :class="{ active: e03SegmentFilter === null }" @click="e03SegmentFilter = null">全部</button>
+                <button v-for="segment in e03Segments" :key="segment" type="button" :class="{ active: e03SegmentFilter === segment }" @click="toggleE03SegmentFilter(segment)">{{ segment }}</button>
+              </div>
+              <div class="e03-filter-group e03-category-filters">
+                <span>问题类型</span>
+                <button type="button" :class="{ active: e03CategoryFilter === null }" @click="e03CategoryFilter = null">全部</button>
+                <button v-for="category in e03Categories" :key="category" type="button" :class="{ active: e03CategoryFilter === category }" @click="toggleE03CategoryFilter(category)">{{ category }}</button>
               </div>
             </div>
-
-            <!-- E03 沿线工点示意图 -->
-            <div v-else-if="detail.key === 'E03'" class="e03-route-area">
-              <svg viewBox="0 0 100 50" preserveAspectRatio="none" class="route-svg">
-                <defs>
-                  <radialGradient id="e03MapGlow" cx="50%" cy="50%" r="65%">
-                    <stop offset="0%" stop-color="#0d2d4a" stop-opacity="0.9" />
-                    <stop offset="100%" stop-color="#020b18" stop-opacity="0" />
-                  </radialGradient>
-                </defs>
-                <rect width="100" height="50" fill="url(#e03MapGlow)" />
-                <path
-                  d="M 5 42 Q 20 36 35 30 T 65 22 T 95 16"
-                  fill="none"
-                  stroke="rgba(105,227,111,0.6)"
-                  stroke-width="1"
-                />
-                <g v-for="p in e03WorkPoints" :key="p.id" class="work-point">
-                  <circle :cx="p.x" :cy="p.y" r="3" :fill="p.risk === 'high' ? '#ff4f5e' : '#69e36f'" />
-                  <circle :cx="p.x" :cy="p.y" r="5" fill="none" :stroke="p.risk === 'high' ? '#ff4f5e' : '#69e36f'" stroke-width="0.5" />
-                  <text :x="p.x" :y="p.y - 5" text-anchor="middle" :fill="p.risk === 'high' ? '#ff4f5e' : '#69e36f'" font-size="4" font-weight="700">{{ p.label }}</text>
-                  <text :x="p.x" :y="p.y + 7" text-anchor="middle" fill="#8fa9c8" font-size="3">{{ p.count }}项</text>
-                </g>
-              </svg>
-              <div class="route-legend">
-                <span class="legend-item"><i class="legend-dot high"></i>高风险（2）</span>
-                <span class="legend-item"><i class="legend-dot normal"></i>一般风险（3）</span>
-              </div>
-            </div>
+            <div v-if="detail.key === 'E03' && filteredE03Items.length === 0" class="e03-chart-empty">当前筛选条件下暂无记录</div>
 
             <!-- S01 时间轴和月度状态 -->
             <div v-else-if="detail.key === 'S01'" class="s01-content">
@@ -1455,35 +1640,6 @@ onUnmounted(() => {
                     <div class="month-status">{{ m.status }}</div>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <!-- S04 沿线位置分布 -->
-            <div v-else-if="detail.key === 'S04'" class="e03-route-area">
-              <svg viewBox="0 0 100 50" preserveAspectRatio="none" class="route-svg">
-                <defs>
-                  <radialGradient id="s04MapGlow" cx="50%" cy="50%" r="65%">
-                    <stop offset="0%" stop-color="#0d2d4a" stop-opacity="0.9" />
-                    <stop offset="100%" stop-color="#020b18" stop-opacity="0" />
-                  </radialGradient>
-                </defs>
-                <rect width="100" height="50" fill="url(#s04MapGlow)" />
-                <path
-                  d="M 5 42 Q 20 36 35 30 T 65 22 T 95 16"
-                  fill="none"
-                  stroke="rgba(47,156,255,0.6)"
-                  stroke-width="1"
-                />
-                <g v-for="p in s04LocationPoints" :key="p.id" class="work-point">
-                  <circle :cx="p.x" :cy="p.y" r="3" :fill="p.type === 'passage' ? '#2f9cff' : p.type === 'noise' ? '#ffb347' : '#a66cff'" />
-                  <circle :cx="p.x" :cy="p.y" r="5" fill="none" :stroke="p.type === 'passage' ? '#2f9cff' : p.type === 'noise' ? '#ffb347' : '#a66cff'" stroke-width="0.5" />
-                  <text :x="p.x" :y="p.y - 5" text-anchor="middle" :fill="p.type === 'passage' ? '#2f9cff' : p.type === 'noise' ? '#ffb347' : '#a66cff'" font-size="4" font-weight="700">{{ p.label }}</text>
-                </g>
-              </svg>
-              <div class="route-legend">
-                <span class="legend-item"><i class="legend-dot passage"></i>通行影响</span>
-                <span class="legend-item"><i class="legend-dot noise"></i>施工扰民</span>
-                <span class="legend-item"><i class="legend-dot land"></i>征地协调</span>
               </div>
             </div>
 
@@ -1612,9 +1768,23 @@ onUnmounted(() => {
 
           <!-- 明细表格 -->
           <div class="detail-section" v-if="!(detail.key === 'CARBON' && ['cost', 'measures'].includes(activeTab)) && !(detail.key === 'MONTHLY' && ['chapters', 'gaps'].includes(activeTab))">
-            <div class="detail-title">{{ detail.detailTitle }}</div>
+            <div v-if="hasFocusContext && !focusNotFound" class="focus-banner">
+              <MapPin :size="14" />
+              <span>{{ focusSourceText }}</span>
+              <span v-if="isGisViewOnlyKpi" class="focus-banner__hint">GIS 来源仅用于查看</span>
+            </div>
+            <div v-else-if="hasFocusContext && focusNotFound" class="focus-banner focus-banner--warn">
+              <AlertTriangle :size="14" />
+              <span>{{ focusNotFoundText }}</span>
+            </div>
+            <div class="detail-title">
+              <span>{{ detail.detailTitle }}</span>
+              <span v-if="detail.key === 'E01'" class="e01-detail-filter-summary">{{ e01DetailFilterSummary }}</span>
+              <span v-else-if="detail.key === 'E02'" class="e02-detail-filter-summary">{{ e02FilterSummary }}</span>
+              <span v-else-if="detail.key === 'E03'" class="e03-detail-filter-summary">{{ e03FilterSummary }}</span>
+            </div>
             <div class="detail-table-wrapper">
-              <table class="detail-table">
+              <table class="detail-table" :class="{ 'detail-table--e01': detail.key === 'E01', 'detail-table--e02': detail.key === 'E02', 'detail-table--e03': detail.key === 'E03' }">
                 <thead>
                   <tr>
                     <th
@@ -1627,39 +1797,67 @@ onUnmounted(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <template v-if="(detail.key === 'S02' ? filteredS02DetailData : detail.key === 'E02' ? e02FilteredDetailData : detail.key === 'MONTHLY' ? filteredMonthlyDetailData : detail.detailData).length > 0">
+                  <template v-if="(detail.key === 'E01' ? filteredE01DetailData : detail.key === 'E02' ? filteredE02Items : detail.key === 'E03' ? filteredE03Items : detail.key === 'MONTHLY' ? filteredMonthlyDetailData : detail.detailData).length > 0">
                     <tr
-                      v-for="(row, ri) in (detail.key === 'S02' ? filteredS02DetailData : detail.key === 'E02' ? e02FilteredDetailData : detail.key === 'MONTHLY' ? filteredMonthlyDetailData : detail.detailData)"
-                      :key="ri"
-                      :class="{ 'row-selected': (detail.key === 'E02' && e02SelectedRow === ri) || (detail.key === 'E04' && e04SelectedRow === ri) }"
-                      @click="detail.key === 'E02' && e02HandleRowClick(ri); detail.key === 'E04' && e04HandleRowClick(ri)"
+                      v-for="(row, ri) in (detail.key === 'E01' ? filteredE01DetailData : detail.key === 'E02' ? filteredE02Items : detail.key === 'E03' ? filteredE03Items : detail.key === 'MONTHLY' ? filteredMonthlyDetailData : detail.detailData)"
+                      :key="detail.key === 'E01' || detail.key === 'E02' || detail.key === 'E03' ? String(row.id) : ri"
+                      :data-e01-id="detail.key === 'E01' ? String(row.id) : undefined"
+                      :data-e02-id="detail.key === 'E02' ? String(row.id) : undefined"
+                      :data-e03-id="detail.key === 'E03' ? String(row.id) : undefined"
+                      :tabindex="detail.key === 'E02' || detail.key === 'E03' || (detail.key === 'E01' && isE01Actionable(row as E01DetailRow)) ? 0 : undefined"
+                      :aria-selected="detail.key === 'E01' ? e01SelectedId === row.id : detail.key === 'E02' ? e02SelectedId === row.id : detail.key === 'E03' ? e03SelectedId === row.id : undefined"
+                      :ref="el => {
+                        if (
+                          (detail.key === 'E02' && e02FocusedIndex === ri)
+                        ) {
+                          focusRowRef = el as HTMLTableRowElement | null
+                        }
+                      }"
+                      :class="{
+                        'row-selected': (detail.key === 'E02' && e02SelectedId === row.id) || (detail.key === 'E03' && e03SelectedId === row.id) || (detail.key === 'E04' && e04SelectedRow === ri),
+                        'e02-selectable': detail.key === 'E02',
+                        'e03-selectable': detail.key === 'E03',
+                        'e03-row-selected': detail.key === 'E03' && e03SelectedId === row.id,
+                        'e03-row-overdue': detail.key === 'E03' && row.overdue === true,
+                        'e01-selectable': detail.key === 'E01' && isE01Actionable(row as E01DetailRow),
+                        'e01-row-selected': detail.key === 'E01' && e01SelectedId === row.id,
+                        'row-focused':
+                          (detail.key === 'E02' && hasFocusContext && e02FocusedIndex === ri),
+                      }"
+                      @click="detail.key === 'E01' && toggleE01Selection(row as E01DetailRow); detail.key === 'E02' && e02ToggleSelection(row as E02DetailRow); detail.key === 'E03' && toggleE03Selection(row as E03DetailRow); detail.key === 'E04' && e04HandleRowClick(ri)"
+                      @keydown.enter.prevent="detail.key === 'E01' && toggleE01Selection(row as E01DetailRow); detail.key === 'E02' && e02ToggleSelection(row as E02DetailRow); detail.key === 'E03' && toggleE03Selection(row as E03DetailRow)"
+                      @keydown.space.prevent="detail.key === 'E01' && toggleE01Selection(row as E01DetailRow); detail.key === 'E02' && e02ToggleSelection(row as E02DetailRow); detail.key === 'E03' && toggleE03Selection(row as E03DetailRow)"
                     >
                       <td
                         v-for="col in detail.detailColumns"
-                        :key="col.key"
-                        :class="{
-                          'text-danger': col.key === 'deadlineStatus'
-                            ? getE02DeadlineStatus(row.deadline as string).type === 'overdue'
-                            : typeof row[col.key] === 'string' && (row[col.key] as string).includes('逾期'),
-                          'text-warning': col.key === 'deadlineStatus'
-                            ? getE02DeadlineStatus(row.deadline as string).type === 'warning'
-                            : (col.key === 'attention' && (row[col.key] as string) === '需关注') ||
-                              (typeof row[col.key] === 'string' && ((row[col.key] as string).includes('剩余') || (row[col.key] as string).includes('临期') || (row[col.key] as string).includes('今日'))),
-                          'text-success': col.key === 'deadlineStatus'
-                            ? getE02DeadlineStatus(row.deadline as string).type === 'normal'
-                            : (col.key === 'attention' && (row[col.key] as string) === '正常') ||
-                              (typeof row[col.key] === 'string' && (row[col.key] as string) === '正常'),
+                      :key="col.key"
+                      :title="detail.key === 'E01' || detail.key === 'E02' || detail.key === 'E03' ? String(row[col.key] ?? '') : undefined"
+                      :class="{
+                          'text-danger': typeof row[col.key] === 'string' && (row[col.key] as string).includes('逾期'),
+                          'text-warning': (col.key === 'attention' && (row[col.key] as string) === '需关注') ||
+                               (typeof row[col.key] === 'string' && ((row[col.key] as string).includes('剩余') || (row[col.key] as string).includes('临期') || (row[col.key] as string).includes('今日'))),
+                          'text-success': (col.key === 'attention' && (row[col.key] as string) === '正常') ||
+                               (typeof row[col.key] === 'string' && (row[col.key] as string) === '正常'),
                         }"
                       >
+                        <span v-if="detail.key === 'E02' && col.key === 'mainStatus'" class="status-tag" :class="e02MainStatusClass(row.mainStatus as E02MainStatus)">
+                          {{ row.mainStatus }}
+                        </span>
+                        <span v-else-if="detail.key === 'E02' && col.key === 'deadlineStatus'" class="status-tag" :class="row.overdue ? 'tag-red' : 'tag-normal'">
+                          {{ row.deadlineStatus }}
+                        </span>
+                        <span v-else-if="detail.key === 'E03' && col.key === 'mainStatus'" class="status-tag" :class="e03MainStatusClass(row.mainStatus as E03DetailRow['mainStatus'])">
+                          {{ row.mainStatus }}
+                        </span>
+                        <span v-else-if="detail.key === 'E03' && col.key === 'deadlineStatus'" class="status-tag" :class="row.overdue ? 'tag-red' : 'tag-normal'">
+                          {{ row.deadlineStatus }}
+                        </span>
                         <span
-                          v-if="col.key === 'status' || col.key === 'level' || col.key === 'retest'"
+                          v-else-if="col.key === 'status' || col.key === 'level' || col.key === 'retest'"
                           class="status-tag"
-                          :class="(typeof row[col.key] === 'string' && (row[col.key] as string).includes('逾期')) ? 'tag-red' : `tag-${detail.theme}`"
+                          :class="detail.key === 'E01' ? e01StatusClass(row[col.key]) : ((typeof row[col.key] === 'string' && (row[col.key] as string).includes('逾期')) ? 'tag-red' : `tag-${detail.theme}`)"
                         >
                           {{ row[col.key] }}
-                        </span>
-                        <span v-else-if="col.key === 'deadlineStatus'">
-                          {{ getE02DeadlineStatus(row.deadline as string).text }}
                         </span>
                         <span v-else-if="col.key === 'no'" class="mono-no">{{ row[col.key] }}</span>
                         <span v-else>{{ row[col.key] }}</span>
@@ -1668,7 +1866,7 @@ onUnmounted(() => {
                   </template>
                   <tr v-else>
                     <td :colspan="detail.detailColumns.length" class="no-data">
-                      暂无符合条件的数据
+                      {{ detail.key === 'E01' || detail.key === 'E02' || detail.key === 'E03' ? '当前筛选条件下暂无记录' : '暂无符合条件的数据' }}
                     </td>
                   </tr>
                 </tbody>
@@ -1679,31 +1877,25 @@ onUnmounted(() => {
 
         <!-- 右侧摘要 -->
         <div class="content-side">
-          <!-- E01 重点结论 -->
+          <!-- E01 复测处置、类别构成与待处理提醒 -->
           <template v-if="detail.key === 'E01'">
-            <div class="side-section">
-              <div class="side-title">重点结论</div>
-              <div class="conclusion-grid">
-                <div class="conclusion-card">
-                  <div class="conclusion-label">扬尘</div>
-                  <div class="conclusion-value" style="color: #69e36f">1<span class="unit">项</span></div>
-                </div>
-                <div class="conclusion-card">
-                  <div class="conclusion-label">噪声</div>
-                  <div class="conclusion-value" style="color: #2f9cff">1<span class="unit">项</span></div>
-                </div>
-                <div class="conclusion-card">
-                  <div class="conclusion-label">连续超标</div>
-                  <div class="conclusion-value" style="color: #ff4f5e">0<span class="unit"></span></div>
-                </div>
-                <div class="conclusion-card">
-                  <div class="conclusion-label">待复测</div>
-                  <div class="conclusion-value" style="color: #ffb347">1<span class="unit"></span></div>
-                </div>
+            <div class="side-section e01-disposal-section">
+              <div class="side-title">复测处置</div>
+              <div class="e01-rate-row">
+                <span>复测完成率</span>
+                <strong>{{ e01CompletionRate }}%</strong>
+              </div>
+              <div class="e01-progress-track" aria-label="复测完成率">
+                <div class="e01-progress-fill" :style="{ width: `${e01CompletionRate}%` }" />
+              </div>
+              <div class="e01-disposal-list">
+                <button type="button" class="e01-disposal-item" :class="{ active: e01StatusFilter === '复测达标' }" @click="toggleE01StatusFilter('复测达标', e01CompletedCount)"><span>已完成复测</span><strong class="green"><span class="e01-disposal-count">{{ e01CompletedCount }}</span><span class="e01-disposal-unit">项</span></strong></button>
+                <button type="button" class="e01-disposal-item" :class="{ active: e01StatusFilter === '待复测' }" @click="toggleE01StatusFilter('待复测', e01PendingCount)"><span>待复测</span><strong class="orange"><span class="e01-disposal-count">{{ e01PendingCount }}</span><span class="e01-disposal-unit">项</span></strong></button>
+                <button type="button" class="e01-disposal-item" :class="{ active: e01StatusFilter === '复测仍超标' }" :disabled="e01StillExceededCount === 0" @click="toggleE01StatusFilter('复测仍超标', e01StillExceededCount)"><span>复测仍超标</span><strong :class="e01StillExceededCount > 0 ? 'red' : 'green'"><span class="e01-disposal-count">{{ e01StillExceededCount }}</span><span class="e01-disposal-unit">项</span></strong></button>
               </div>
             </div>
-            <div class="side-section">
-              <div class="side-title">类别构成（项）</div>
+            <div class="side-section e01-composition-section">
+              <div class="side-title">类别构成</div>
               <div class="ring-wrap">
                 <svg v-if="e01CompositionData.length > 0" viewBox="0 0 100 100" class="mini-ring">
                   <circle cx="50" cy="50" r="38" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="12" />
@@ -1720,8 +1912,8 @@ onUnmounted(() => {
                     stroke-linecap="round"
                     :transform="`rotate(${-90 + (e01CompositionData.slice(0, idx).reduce((sum, i) => sum + i.value, 0) / e01CompositionData.reduce((sum, i) => sum + i.value, 0)) * 360} 50 50)`"
                   />
-                  <text x="50" y="46" text-anchor="middle" fill="#e8f3ff" font-size="9" font-weight="700">合计</text>
-                  <text x="50" y="58" text-anchor="middle" fill="#e8f3ff" font-size="12" font-weight="700">{{ e01CompositionData.reduce((sum, i) => sum + i.value, 0) }} 项次</text>
+                  <text x="50" y="43" text-anchor="middle" fill="#e8f3ff" font-size="10.5" font-weight="600">合计</text>
+                  <text x="50" y="64" text-anchor="middle" fill="#e8f3ff" font-size="14" font-weight="700">{{ e01CompositionData.reduce((sum, i) => sum + i.value, 0) }}项次</text>
                 </svg>
                 <div v-if="e01CompositionData.length > 0" class="ring-legend">
                   <div v-for="item in e01CompositionData" :key="item.name" class="ring-legend-item">
@@ -1731,94 +1923,104 @@ onUnmounted(() => {
                 <div v-else class="empty-hint">暂无有效数据</div>
               </div>
             </div>
+            <div class="side-section e01-reminder-section">
+              <div class="side-title">待处理提醒</div>
+              <button v-if="e01PendingReminder" type="button" class="e01-reminder" aria-label="查看并选择待处理的PM10复测记录" @click="handleE01Reminder">
+                <div class="e01-reminder-point">{{ e01PendingReminder.point }}</div>
+                <div class="e01-reminder-message">PM10超标记录待复测</div>
+                <div class="e01-reminder-time">监测时间：{{ e01PendingReminder.time }}</div>
+              </button>
+              <div v-else class="empty-hint">当前无待处理复测记录</div>
+            </div>
           </template>
 
           <!-- E02 问题类型 -->
           <template v-else-if="detail.key === 'E02'">
-            <div class="side-section">
-              <div class="side-title">未闭环问题类型分布</div>
-              <div class="type-bar-list">
-                <div
+            <div class="side-section e02-type-section">
+              <div class="side-title">
+                <span>问题类型分布</span>
+                <small>{{ e02TypeScopeItems.length }}条</small>
+              </div>
+              <div class="e02-distribution-list">
+                <button
                   v-for="t in e02TypeData"
                   :key="t.name"
-                  class="type-bar-item"
-                  :class="{ active: e02TableFilter?.field === 'category' && e02TableFilter?.value === t.name }"
-                  style="cursor: pointer;"
-                  @click="e02ToggleFilter('category', t.name)"
+                  type="button"
+                  class="e02-distribution-row"
+                  :class="{ active: categoryFilter === t.name }"
+                  @click="e02ToggleCategory(t.name)"
                 >
-                  <span class="type-label">{{ t.name }}</span>
-                  <div class="type-bar-track">
-                    <div class="type-bar-fill" :style="{ width: `${(t.value / Math.max(...e02TypeData.map(d => d.value), 1)) * 100}%`, background: '#69e36f' }" />
-                  </div>
-                  <span class="type-value">{{ t.value }}</span>
-                </div>
+                  <span>{{ t.name }}</span>
+                  <strong>{{ t.value }}<small>项</small></strong>
+                </button>
+                <div v-if="e02TypeData.length === 0" class="e02-empty-state">当前筛选下暂无问题类型数据</div>
               </div>
             </div>
-            <div class="alert-banner" :class="{ 'green': e02OverdueCount === 0 }">
-              <AlertTriangle :size="14" />
-              <span>{{ e02OverdueMessage }}</span>
-            </div>
-          </template>
-
-          <!-- S02 风险摘要 -->
-          <template v-else-if="detail.key === 'S02'">
-            <div class="side-section">
-              <div class="side-title">风险类型分布（项）</div>
-              <div class="type-bar-list">
-                <div v-for="t in s02TypeData" :key="t.name" class="type-bar-item">
-                  <span class="type-label">{{ t.name }}</span>
-                  <div class="type-bar-track">
-                    <div class="type-bar-fill" :style="{ width: `${(t.value / 2) * 100}%` }" />
-                  </div>
-                  <span class="type-value">{{ t.value }}</span>
+            <div class="side-section e02-department-section">
+              <div class="side-title">
+                <span>责任部门分布</span>
+                <small>{{ filteredE02Items.length }}条</small>
+              </div>
+              <div class="e02-distribution-list">
+                <div v-for="item in e02DepartmentData" :key="item.name" class="e02-distribution-row is-static">
+                  <span>{{ item.name }}</span>
+                  <strong>{{ item.value }}<small>项</small></strong>
                 </div>
+                <div v-if="e02DepartmentData.length === 0" class="e02-empty-state">当前筛选下暂无责任部门数据</div>
               </div>
             </div>
-            <div class="side-section">
-              <div class="side-title">风险治理关注点（项）</div>
-              <div class="type-bar-list">
-                <div v-for="t in s02ConcernData" :key="t.name" class="type-bar-item">
-                  <span class="type-label">{{ t.name }}</span>
-                  <div class="type-bar-track">
-                    <div class="type-bar-fill" :style="{ width: `${(t.value / 1) * 100}%` }" />
-                  </div>
-                  <span class="type-value">{{ t.value }}</span>
-                </div>
+            <div class="side-section e02-overdue-section">
+              <div class="side-title">逾期提醒</div>
+              <button
+                v-if="e02OverdueReminder"
+                type="button"
+                class="e02-overdue-reminder"
+                aria-label="查看并选中逾期环保问题"
+                @click="handleE02OverdueReminder"
+              >
+                <strong>{{ e02OverdueReminder.name }}</strong>
+                <span>责任部门：{{ e02OverdueReminder.department }}</span>
+                <span>整改截止：{{ e02OverdueReminder.deadline }}</span>
+                <em>已超过整改期限</em>
+              </button>
+              <div v-else class="e02-overdue-empty" :class="{ 'is-empty-result': filteredE02Items.length === 0 }">
+                {{ filteredE02Items.length === 0 ? '当前筛选条件下暂无事项' : '当前筛选下无逾期事项' }}
               </div>
             </div>
           </template>
 
-          <!-- G02 预警摘要 -->
-          <template v-else-if="detail.key === 'G02'">
-            <div class="side-section">
-              <div class="side-title">预警摘要</div>
-              <div class="warning-list">
-                <div v-for="w in g02WarningData" :key="w.name" class="warning-item">
-                  <span class="warning-label">{{ w.name }}</span>
-                  <span class="warning-value">{{ w.value }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="alert-banner purple">
-              <AlertTriangle :size="14" />
-              <span>1项许可已逾期，1项影响施工活动</span>
-            </div>
-          </template>
-
-          <!-- E03 水保风险摘要 -->
+          <!-- E03 真实问题分布与逾期提醒 -->
           <template v-else-if="detail.key === 'E03'">
-            <div class="side-section">
-              <div class="side-title">水土保持风险摘要</div>
-              <div class="warning-list">
-                <div v-for="w in e03RiskSummary" :key="w.name" class="warning-item">
-                  <span class="warning-label">{{ w.name }}</span>
-                  <span class="warning-value">{{ w.value }}</span>
-                </div>
+            <div class="side-section e03-type-section">
+              <div class="side-title"><span>问题类型分布</span><small>{{ filteredE03Items.length }}条</small></div>
+              <div class="e03-distribution-list">
+                <button v-for="item in e03TypeData" :key="item.name" type="button" class="e03-distribution-row" :class="{ active: e03CategoryFilter === item.name }" @click="toggleE03CategoryFilter(item.name)">
+                  <span>{{ item.name }}</span><strong>{{ item.value }}<small>项</small></strong>
+                </button>
+                <div v-if="e03TypeData.length === 0" class="e03-empty-state">当前筛选下暂无问题类型数据</div>
               </div>
             </div>
-            <div class="alert-banner">
-              <AlertTriangle :size="14" />
-              <span>汛期高风险点 2 处，请重点关注</span>
+            <div class="side-section e03-department-section">
+              <div class="side-title"><span>责任部门分布</span><small>{{ filteredE03Items.length }}条</small></div>
+              <div class="e03-distribution-list">
+                <div v-for="item in e03DepartmentData" :key="item.name" class="e03-distribution-row is-static">
+                  <span>{{ item.name }}</span><strong>{{ item.value }}<small>项</small></strong>
+                </div>
+                <div v-if="e03DepartmentData.length === 0" class="e03-empty-state">当前筛选下暂无责任部门数据</div>
+              </div>
+            </div>
+            <div class="side-section e03-overdue-section">
+              <div class="side-title">逾期提醒</div>
+              <button v-if="e03OverdueReminder" type="button" class="e03-overdue-reminder" :aria-label="`查看并选中逾期水保问题：${e03OverdueReminder.name}`" @click="handleE03OverdueReminder">
+                <strong>{{ e03OverdueReminder.name }}</strong>
+                <span>{{ e03OverdueReminder.segment }}</span>
+                <span>责任部门：{{ e03OverdueReminder.department }}</span>
+                <span>整改截止：{{ e03OverdueReminder.deadline }}</span>
+                <em>已超过整改期限<span v-if="e03OtherOverdueCount > 0">，另有{{ e03OtherOverdueCount }}项逾期</span></em>
+              </button>
+              <div v-else class="e03-overdue-empty" :class="{ 'is-empty-result': filteredE03Items.length === 0 }">
+                {{ filteredE03Items.length === 0 ? '当前筛选条件下暂无记录' : '当前筛选下无逾期事项' }}
+              </div>
             </div>
           </template>
 
@@ -1852,23 +2054,6 @@ onUnmounted(() => {
             </div>
           </template>
 
-          <!-- G04 节点影响 -->
-          <template v-else-if="detail.key === 'G04'">
-            <div class="side-section">
-              <div class="side-title">节点影响摘要（受影响关键节点数）</div>
-              <div class="warning-list">
-                <div v-for="w in g04NodeImpact" :key="w.name" class="warning-item">
-                  <span class="warning-label">{{ w.name }}</span>
-                  <span class="warning-value">{{ w.value }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="alert-banner purple">
-              <AlertTriangle :size="14" />
-              <span>存在 4 项资料影响关键节点，请尽快补齐以保障流程推进</span>
-            </div>
-          </template>
-
           <!-- S03 风险等级 -->
           <template v-else-if="detail.key === 'S03'">
             <div class="side-section">
@@ -1886,68 +2071,6 @@ onUnmounted(() => {
             <div class="alert-banner">
               <AlertTriangle :size="14" />
               <span>1项群体性风险（工资支付涉及12人），1项逾期</span>
-            </div>
-          </template>
-
-          <!-- S04 来源与位置 -->
-          <template v-else-if="detail.key === 'S04'">
-            <div class="side-section">
-              <div class="side-title">来源渠道分布</div>
-              <div class="warning-list">
-                <div class="warning-item">
-                  <span class="warning-label">12345 转办</span>
-                  <span class="warning-value">1</span>
-                </div>
-                <div class="warning-item">
-                  <span class="warning-label">来电来访</span>
-                  <span class="warning-value">1</span>
-                </div>
-                <div class="warning-item">
-                  <span class="warning-label">现场协调</span>
-                  <span class="warning-value">1</span>
-                </div>
-              </div>
-            </div>
-            <div class="alert-banner">
-              <AlertTriangle :size="14" />
-              <span>1项逾期，1项影响施工进度</span>
-            </div>
-          </template>
-
-          <!-- G01 受影响节点 -->
-          <template v-else-if="detail.key === 'G01'">
-            <div class="side-section">
-              <div class="side-title">受影响关键节点（个）</div>
-              <div class="warning-list">
-                <div v-for="w in g01NodeImpact" :key="w.name" class="warning-item">
-                  <span class="warning-label">{{ w.name }}</span>
-                  <span class="warning-value">{{ w.value }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="alert-banner purple">
-              <AlertTriangle :size="14" />
-              <span>1项已逾期，2项临近关键节点</span>
-            </div>
-          </template>
-
-          <!-- G03 检查来源 -->
-          <template v-else-if="detail.key === 'G03'">
-            <div class="side-section">
-              <div class="side-title">检查来源分布（项）</div>
-              <div class="type-bar-list">
-                <div v-for="t in g03SourceData" :key="t.name" class="type-bar-item">
-                  <span class="type-label">{{ t.name }}</span>
-                  <div class="type-bar-track">
-                    <div class="type-bar-fill" :style="{ width: `${(t.value / 2) * 100}%` }" />
-                  </div>
-                  <span class="type-value">{{ t.value }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="alert-banner purple">
-              <AlertTriangle :size="14" />
-              <span>2项逾期整改，1项影响施工进度</span>
             </div>
           </template>
 
@@ -2013,13 +2136,17 @@ onUnmounted(() => {
           <FileCheck :size="12" />
           <span>数据来源：{{ (detail.dataSource || '').split(' ')[0] }}</span>
         </div>
+        <div v-if="detail.key === 'E02' && detail.statisticsAsOf" class="footer-item">
+          <Clock :size="12" />
+          <span>统计时点：{{ detail.statisticsAsOf }}</span>
+        </div>
         <div class="footer-item">
           <Clock :size="12" />
           <span>更新时间：{{ detail.updateTime }}</span>
         </div>
         <div v-if="detail.completeness" class="footer-item" :class="detail.completenessStatus">
           <ShieldCheck :size="12" />
-          <span>{{ detail.completeness }}</span>
+          <span>{{ detail.key === 'E01' ? `完整性：${detail.completeness}` : detail.completeness }}</span>
         </div>
         <div v-if="detail.isMock" class="footer-item mock-tag">
           原型示例数据
@@ -2028,16 +2155,18 @@ onUnmounted(() => {
 
       <!-- 操作按钮 -->
       <div class="modal-actions">
-        <button v-if="detail.key === 'E02'" class="btn btn-ghost" :disabled="e02SelectedRow === null" @click="handleDetailReserved" :title="e02SelectedRow === null ? '请先选择事项' : '查看事项详情'">
-          查看事项详情
+        <button v-if="detail.key === 'E02' || detail.key === 'E03'" class="btn btn-ghost" :disabled="detail.key === 'E02' ? e02SelectedRow === null : e03SelectedRow === null" @click="handleDetailReserved" :title="detail.key === 'E02' ? (e02SelectedRow === null ? '请先选择事项' : e02ActionTitle) : (e03SelectedRow === null ? '请先选择水保问题' : `已选择“${e03SelectedRow.name}”`)">
+          {{ detail.key === 'E03' ? '查看问题详情' : '查看事项详情' }}
         </button>
         <button
+          v-if="!isGisViewOnlyKpi"
           class="btn btn-primary"
           :style="detail.key === 'E02' || detail.key === 'E04' ? { background: '#2f9cff', borderColor: '#2f9cff' } : { background: themeColor, borderColor: themeColor }"
-          :disabled="(detail.key === 'E02' && !e02CanSupervise) || (detail.key === 'E04' && !e04CanSupervise)"
+          :disabled="(detail.key === 'E01' && !e01CanSupervise) || (detail.key === 'E02' && !e02CanSupervise) || (detail.key === 'E03' && !e03CanOperate) || (detail.key === 'E04' && !e04CanSupervise)"
+          :title="detail.key === 'E01' ? e01SuperviseTitle : detail.key === 'E02' ? e02ActionTitle : detail.key === 'E03' ? (e03SelectedRow ? `对“${e03SelectedRow.name}”发起督办` : '请先选择水保问题') : undefined"
           @click="handleSupervise"
         >
-          发起督办
+          {{ detail.key === 'E01' || detail.key === 'E02' || detail.key === 'E03' ? '发起督办（原型）' : '发起督办' }}
         </button>
         <button class="btn btn-outline" @click="emit('close')">
           关闭
@@ -2048,7 +2177,7 @@ onUnmounted(() => {
       <Transition name="toast">
         <div v-if="showSuperviseToast" class="supervise-toast">
           <AlertTriangle :size="14" />
-          <span>督办功能为原型预留，尚未接入业务流程</span>
+          <span>{{ superviseToastMessage }}</span>
         </div>
       </Transition>
     </div>
@@ -2068,6 +2197,14 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   animation: fadeIn 0.2s ease;
+}
+
+.kpi-modal-overlay.e01-acceptance-overlay {
+  animation: none;
+}
+
+.kpi-modal-overlay.e02-acceptance-overlay {
+  animation: none;
 }
 
 @keyframes fadeIn {
@@ -2107,6 +2244,285 @@ onUnmounted(() => {
       0 0 0 1px rgba(166, 108, 255, 0.35),
       0 20px 60px rgba(0, 0, 0, 0.6);
   }
+
+  &.is-e01 {
+    width: 1436px;
+    max-width: none;
+    height: 880px;
+    max-height: none;
+    flex-shrink: 0;
+    border-color: rgba(105, 227, 111, 0.35);
+    border-radius: 8px;
+    outline: none;
+    transform: scale(var(--e01-scale, 1));
+    transform-origin: center;
+    animation: e01Appear 0.2s ease;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+
+    &:focus,
+    &:focus-visible {
+      outline: none;
+    }
+
+    .modal-header {
+      height: 60px;
+      box-sizing: border-box;
+      padding: 0 16px;
+
+      .modal-title {
+        font-size: 22px;
+      }
+    }
+
+    .modal-summary {
+      gap: 12px;
+      padding: 12px 16px;
+
+    .summary-card {
+        box-sizing: border-box;
+        height: 65px;
+        padding: 7px 12px;
+        gap: 2px;
+
+        .summary-label {
+          overflow: hidden;
+          font-size: 14px;
+          line-height: 18px;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }
+
+        .summary-value-row {
+          height: 29px;
+          align-items: baseline;
+          gap: 5px;
+
+          .summary-value {
+            font-size: 28px;
+            line-height: 28px;
+          }
+
+          .summary-unit {
+            font-size: 13px;
+            line-height: 16px;
+          }
+        }
+      }
+    }
+
+    .modal-content {
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 12px;
+      padding: 0 16px 12px;
+    }
+
+    .content-main,
+    .content-side {
+      gap: 12px;
+    }
+
+    .content-side {
+      overflow: hidden;
+    }
+
+    .chart-section,
+    .detail-section,
+    .side-section {
+      border-color: rgba(105, 227, 111, 0.18);
+      border-radius: 6px;
+    }
+
+    .chart-section {
+      padding: 10px 12px;
+
+      .chart-title {
+        font-size: 15px;
+      }
+
+      .chart-filters .filter-btn {
+        padding: 3px 11px;
+        font-size: 13px;
+        line-height: 18px;
+      }
+
+      .chart-legend {
+        gap: 14px;
+
+        .legend-item {
+          font-size: 13px;
+          line-height: 18px;
+        }
+      }
+    }
+
+    .chart-container {
+      height: 180px;
+    }
+
+    .modal-footer-info {
+      padding-right: 16px;
+      padding-left: 16px;
+      font-size: 12px;
+
+      .footer-item {
+        white-space: nowrap;
+      }
+    }
+
+    .modal-actions {
+      padding: 10px 16px 14px;
+    }
+
+    .detail-title,
+    .side-title {
+      font-size: 15px;
+      line-height: 20px;
+    }
+
+    .detail-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .e01-detail-filter-summary {
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    &.is-acceptance,
+    &.is-acceptance * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+
+  &.is-e02,
+  &.is-e03 {
+    width: 1436px;
+    max-width: none;
+    height: 880px;
+    max-height: none;
+    flex-shrink: 0;
+    border-color: rgba(105, 227, 111, 0.35);
+    border-radius: 8px;
+    outline: none;
+    transform: scale(var(--e02-scale, var(--e03-scale, 1)));
+    transform-origin: center;
+    animation: e01Appear 0.2s ease;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+
+    &:focus,
+    &:focus-visible {
+      outline: none;
+    }
+
+    .modal-header {
+      height: 60px;
+      box-sizing: border-box;
+      padding: 0 16px;
+
+      .modal-title { font-size: 22px; }
+    }
+
+    .modal-summary {
+      gap: 12px;
+      padding: 12px 16px;
+
+      .summary-card {
+        box-sizing: border-box;
+        height: 65px;
+        padding: 7px 12px;
+        gap: 2px;
+
+        .summary-label {
+          overflow: hidden;
+          font-size: 14px;
+          line-height: 18px;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }
+
+        .summary-value-row {
+          height: 29px;
+          align-items: baseline;
+          gap: 5px;
+
+          .summary-value { font-size: 28px; line-height: 28px; }
+          .summary-unit { font-size: 13px; line-height: 16px; }
+        }
+      }
+    }
+
+    .modal-content {
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 12px;
+      padding: 0 16px 12px;
+    }
+
+    .content-main,
+    .content-side { gap: 12px; }
+
+    .content-side { overflow: hidden; }
+
+    .chart-section,
+    .detail-section,
+    .side-section {
+      border-color: rgba(105, 227, 111, 0.18);
+      border-radius: 6px;
+    }
+
+    .chart-section {
+      padding: 10px 12px;
+      .chart-title { font-size: 15px; }
+    }
+
+    .chart-container { height: 180px; }
+
+    .detail-title,
+    .side-title {
+      font-size: 15px;
+      line-height: 20px;
+    }
+
+    .detail-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .e02-detail-filter-summary,
+    .e03-detail-filter-summary {
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .modal-footer-info {
+      padding-right: 16px;
+      padding-left: 16px;
+      font-size: 12px;
+      .footer-item { white-space: nowrap; }
+    }
+
+    .modal-actions { padding: 10px 16px 14px; }
+
+    &.is-acceptance,
+    &.is-acceptance * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+@keyframes e01Appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes slideUp {
@@ -2192,7 +2608,23 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    transition: border-color 0.2s ease, background 0.2s ease;
+      transition: border-color 0.2s ease, background 0.2s ease;
+
+      &.e02-summary-card {
+        width: auto;
+        margin: 0;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+
+        &:hover,
+        &:focus-visible {
+          background: rgba(47, 156, 255, 0.06);
+          border-color: rgba(47, 156, 255, 0.35);
+          outline: none;
+        }
+      }
 
     .summary-label {
       font-size: 12px;
@@ -2497,8 +2929,6 @@ onUnmounted(() => {
         border-radius: 50%;
         display: inline-block;
 
-        &.high { background: #ff4f5e; }
-        &.normal { background: #69e36f; }
         &.passage { background: #2f9cff; }
         &.noise-dot { background: #ffb347; }
         &.land { background: #a66cff; }
@@ -2519,6 +2949,31 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 8px;
   overflow: hidden;
+
+  .focus-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #2f9cff;
+    background: rgba(47, 156, 255, 0.08);
+    border: 1px solid rgba(47, 156, 255, 0.25);
+    border-radius: 3px;
+    flex-shrink: 0;
+
+    &--warn {
+      color: #ffb347;
+      background: rgba(255, 179, 71, 0.08);
+      border-color: rgba(255, 179, 71, 0.25);
+    }
+
+    &__hint {
+      margin-left: auto;
+      font-size: 10px;
+      opacity: 0.7;
+    }
+  }
 
   .detail-title {
     font-size: 13px;
@@ -2575,6 +3030,18 @@ onUnmounted(() => {
       box-shadow: inset 2px 0 0 #2f9cff;
     }
 
+    // GIS 关联定位高亮
+    tr.row-focused td {
+      background: rgba(47, 156, 255, 0.18) !important;
+      box-shadow: inset 3px 0 0 #2f9cff, 0 0 12px rgba(47, 156, 255, 0.25);
+      animation: focusRowGlow 1.6s ease-out;
+    }
+
+    @keyframes focusRowGlow {
+      0% { background: rgba(47, 156, 255, 0.35) !important; }
+      100% { background: rgba(47, 156, 255, 0.18) !important; }
+    }
+
     .status-tag {
       display: inline-block;
       padding: 1px 6px;
@@ -2602,6 +3069,157 @@ onUnmounted(() => {
         background: rgba(255, 79, 94, 0.12);
         border: 1px solid rgba(255, 79, 94, 0.3);
       }
+      &.tag-orange {
+        color: #ffb347;
+        background: rgba(255, 179, 71, 0.12);
+        border: 1px solid rgba(255, 179, 71, 0.3);
+      }
+      &.tag-normal {
+        color: #9cc9a3;
+        background: rgba(105, 227, 111, 0.07);
+        border: 1px solid rgba(105, 227, 111, 0.18);
+      }
+    }
+
+    &.detail-table--e01 {
+      table-layout: fixed;
+      font-size: 14px;
+
+      th {
+        height: 36px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 36px;
+      }
+
+      td {
+        height: 38px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 38px;
+      }
+
+      .status-tag {
+        padding: 2px 7px;
+        font-size: 12px;
+        line-height: 19px;
+      }
+
+      tr.e01-selectable {
+        cursor: pointer;
+
+        &:hover td {
+          background: rgba(255, 179, 71, 0.045);
+        }
+
+        &:focus-visible {
+          outline: 1px solid rgba(255, 179, 71, 0.55);
+          outline-offset: -1px;
+        }
+      }
+
+      tr:not(.e01-selectable):hover td {
+        background: transparent;
+      }
+
+      tr.e01-row-selected td {
+        background: rgba(255, 179, 71, 0.08);
+
+        &:first-child {
+          box-shadow: inset 2px 0 0 #ffb347;
+        }
+      }
+    }
+
+    &.detail-table--e02 {
+      table-layout: fixed;
+      font-size: 14px;
+
+      th {
+        height: 36px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 36px;
+      }
+
+      td {
+        height: 38px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 38px;
+      }
+
+      .status-tag {
+        padding: 2px 7px;
+        font-size: 12px;
+        line-height: 19px;
+      }
+
+      tr.e02-selectable {
+        cursor: pointer;
+
+        &:focus-visible {
+          outline: 1px solid rgba(47, 156, 255, 0.55);
+          outline-offset: -1px;
+        }
+      }
+
+      tr.row-selected td {
+        box-shadow: none;
+
+        &:first-child { box-shadow: inset 2px 0 0 #2f9cff; }
+      }
+    }
+
+    &.detail-table--e03 {
+      table-layout: fixed;
+      font-size: 14px;
+
+      th {
+        height: 36px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 36px;
+      }
+
+      td {
+        height: 38px;
+        box-sizing: border-box;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 38px;
+      }
+
+      .status-tag {
+        padding: 2px 7px;
+        font-size: 12px;
+        line-height: 19px;
+      }
+
+      tr.e03-selectable {
+        cursor: pointer;
+
+        &:focus-visible {
+          outline: 1px solid rgba(105, 227, 111, 0.55);
+          outline-offset: -1px;
+        }
+      }
+
+      tr.e03-row-selected td {
+        background: rgba(105, 227, 111, 0.08) !important;
+        box-shadow: none;
+        &:first-child { box-shadow: inset 2px 0 0 #69e36f; }
+      }
+
+      tr.e03-row-selected.e03-row-overdue td {
+        background: rgba(255, 79, 94, 0.08) !important;
+        &:first-child { box-shadow: inset 2px 0 0 #ff4f5e; }
+      }
     }
 
     .mono-no {
@@ -2628,6 +3246,411 @@ onUnmounted(() => {
     font-weight: 600;
     color: var(--text-main);
     margin-bottom: 8px;
+  }
+}
+
+.is-e02 {
+  .e02-type-section { flex: 0 0 214px; }
+  .e02-department-section { flex: 0 0 146px; }
+  .e02-overdue-section { flex: 1; min-height: 0; }
+
+  .chart-section { position: relative; }
+
+  .e02-active-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 8px;
+    border: 1px solid rgba(47, 156, 255, 0.22);
+    border-radius: 3px;
+    background: rgba(47, 156, 255, 0.06);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 18px;
+    white-space: nowrap;
+
+    strong { color: #69e36f; font-weight: 600; }
+
+    button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #2f9cff;
+      font: inherit;
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible { color: #8ecaff; outline: none; }
+    }
+  }
+
+  .e02-chart-empty {
+    position: absolute;
+    top: 44px;
+    right: 18px;
+    z-index: 2;
+    padding: 4px 9px;
+    border-radius: 3px;
+    background: rgba(143, 169, 200, 0.07);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 18px;
+    pointer-events: none;
+  }
+
+  .side-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    > small {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+  }
+
+  .e02-distribution-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .e02-distribution-row {
+    width: 100%;
+    min-height: 28px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0;
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.018);
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 20px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible,
+    &.active {
+      border-color: rgba(105, 227, 111, 0.32);
+      background: rgba(105, 227, 111, 0.07);
+      outline: none;
+    }
+
+    &.is-static {
+      cursor: default;
+      &:hover { border-color: transparent; background: rgba(255, 255, 255, 0.018); }
+    }
+
+    strong {
+      min-width: 38px;
+      color: #e8f3ff;
+      font-family: var(--font-num);
+      font-size: 18px;
+      line-height: 20px;
+      text-align: right;
+    }
+
+    small {
+      margin-left: 2px;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 400;
+    }
+  }
+
+  .e02-overdue-reminder {
+    width: 100%;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 79, 94, 0.32);
+    border-radius: 4px;
+    background: rgba(255, 79, 94, 0.07);
+    color: var(--text-main);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      border-color: rgba(255, 79, 94, 0.58);
+      background: rgba(255, 79, 94, 0.11);
+      outline: none;
+    }
+
+    strong { font-size: 14px; line-height: 20px; }
+    span { color: #b8cce3; font-size: 13px; line-height: 18px; }
+    em { color: #ff6b78; font-size: 13px; font-style: normal; font-weight: 600; line-height: 18px; }
+  }
+
+  .e02-empty-state,
+  .e02-overdue-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 54px;
+    padding: 8px;
+    box-sizing: border-box;
+    border: 1px dashed rgba(143, 169, 200, 0.14);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 20px;
+    text-align: center;
+  }
+
+  .e02-overdue-empty {
+    min-height: 96px;
+    color: #9cc9a3;
+
+    &.is-empty-result { color: var(--text-muted); }
+  }
+
+  .supervise-toast span { white-space: pre-line; }
+}
+
+.is-e03 {
+  .chart-section { position: relative; max-height: none; }
+  &.kpi-modal .chart-container { height: 194px; }
+  .e03-type-section { flex: 1 1 auto; min-height: 0; }
+  .e03-department-section { flex: 0 0 96px; }
+  .e03-overdue-section { flex: 0 0 162px; }
+
+  .detail-table-wrapper {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(143, 169, 200, 0.52) rgba(143, 169, 200, 0.08);
+
+    &::-webkit-scrollbar { width: 8px; }
+    &::-webkit-scrollbar-track {
+      background: rgba(143, 169, 200, 0.08);
+      border-radius: 4px;
+    }
+    &::-webkit-scrollbar-thumb {
+      min-height: 28px;
+      border: 2px solid transparent;
+      border-radius: 4px;
+      background: rgba(143, 169, 200, 0.52);
+      background-clip: padding-box;
+    }
+    &::-webkit-scrollbar-thumb:hover { background: rgba(143, 169, 200, 0.72); background-clip: padding-box; }
+  }
+
+  .e03-active-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 8px;
+    border: 1px solid rgba(105, 227, 111, 0.22);
+    border-radius: 3px;
+    background: rgba(105, 227, 111, 0.06);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 18px;
+    white-space: nowrap;
+
+    strong { color: #69e36f; font-weight: 600; }
+
+    button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #69e36f;
+      font: inherit;
+      cursor: pointer;
+      &:hover,
+      &:focus-visible { color: #b6f4ba; outline: none; }
+    }
+  }
+
+  .e03-filter-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 8px;
+    border: 1px solid rgba(105, 227, 111, 0.14);
+    border-radius: 4px;
+    background: rgba(105, 227, 111, 0.025);
+  }
+
+  .e03-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+
+    > span {
+      width: 62px;
+      flex: 0 0 62px;
+      color: #b8cce3;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    button {
+      min-width: 44px;
+      height: 22px;
+      padding: 0 8px;
+      border: 1px solid rgba(143, 169, 200, 0.18);
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 20px;
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible,
+      &.active {
+        border-color: rgba(105, 227, 111, 0.42);
+        background: rgba(105, 227, 111, 0.09);
+        color: #e8f3ff;
+        outline: none;
+      }
+    }
+  }
+
+  .e03-chart-empty {
+    position: absolute;
+    top: 118px;
+    right: 18px;
+    z-index: 2;
+    padding: 4px 9px;
+    border-radius: 3px;
+    background: rgba(143, 169, 200, 0.08);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 18px;
+    pointer-events: none;
+  }
+
+  .side-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    > small { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+  }
+
+  .e03-distribution-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .e03-distribution-row {
+    width: 100%;
+    min-height: 25px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.018);
+    color: var(--text-main);
+    font-size: 13px;
+    line-height: 19px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible,
+    &.active {
+      border-color: rgba(105, 227, 111, 0.32);
+      background: rgba(105, 227, 111, 0.07);
+      outline: none;
+    }
+
+    &.is-static {
+      cursor: default;
+      &:hover { border-color: transparent; background: rgba(255, 255, 255, 0.018); }
+    }
+
+    strong {
+      min-width: 38px;
+      color: #e8f3ff;
+      font-family: var(--font-num);
+      font-size: 18px;
+      line-height: 20px;
+      text-align: right;
+    }
+
+    small {
+      margin-left: 2px;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 400;
+    }
+  }
+
+  .e03-overdue-reminder {
+    width: 100%;
+    min-height: 126px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    border: 1px solid rgba(255, 79, 94, 0.32);
+    border-radius: 4px;
+    background: rgba(255, 79, 94, 0.07);
+    color: var(--text-main);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      border-color: rgba(255, 79, 94, 0.58);
+      background: rgba(255, 79, 94, 0.11);
+      outline: none;
+    }
+
+    strong { font-size: 14px; line-height: 20px; }
+    span { color: #b8cce3; font-size: 13px; line-height: 17px; }
+    em { color: #ff6b78; font-size: 13px; font-style: normal; font-weight: 600; line-height: 18px; }
+  }
+
+  .e03-empty-state,
+  .e03-overdue-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 8px;
+    box-sizing: border-box;
+    border: 1px dashed rgba(143, 169, 200, 0.14);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 20px;
+    text-align: center;
+  }
+
+  .e03-overdue-empty {
+    min-height: 116px;
+    color: #9cc9a3;
+    &.is-empty-result { color: var(--text-muted); }
   }
 }
 
@@ -2707,6 +3730,174 @@ onUnmounted(() => {
         font-family: var(--font-num);
       }
     }
+  }
+}
+
+.e01-disposal-section {
+  .e01-rate-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 22px;
+
+    strong {
+      color: #69e36f;
+      font-family: var(--font-num);
+      font-size: 26px;
+      line-height: 1;
+    }
+  }
+
+  .e01-progress-track {
+    height: 7px;
+    margin: 9px 0 10px;
+    overflow: hidden;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .e01-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(105, 227, 111, 0.65), #69e36f);
+  }
+
+  .e01-disposal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+
+    .e01-disposal-item {
+      display: flex;
+      width: 100%;
+      padding: 0 4px;
+      align-items: center;
+      justify-content: space-between;
+      border: 0;
+      border-radius: 3px;
+      outline: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 23px;
+      text-align: left;
+      cursor: pointer;
+
+      &:hover:not(:disabled),
+      &:focus-visible {
+        background: rgba(47, 156, 255, 0.08);
+      }
+
+      &.active {
+        background: rgba(47, 156, 255, 0.12);
+        box-shadow: inset 2px 0 0 #2f9cff;
+      }
+
+      &:disabled {
+        cursor: default;
+        opacity: 0.75;
+      }
+    }
+
+    strong {
+      display: inline-flex;
+      width: 52px;
+      align-items: baseline;
+      justify-content: flex-end;
+      font-family: var(--font-num);
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .e01-disposal-count {
+      font-size: 18px;
+      line-height: 20px;
+    }
+
+    .e01-disposal-unit {
+      margin-left: 3px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 16px;
+    }
+    .green { color: #69e36f; }
+    .orange { color: #ffb347; }
+    .red { color: #ff4f5e; }
+  }
+}
+
+.e01-composition-section {
+  flex: 1;
+  min-height: 0;
+
+  .ring-wrap {
+    flex-direction: row;
+    justify-content: center;
+    gap: 18px;
+    height: calc(100% - 22px);
+  }
+
+  .ring-wrap .mini-ring {
+    width: 116px;
+    height: 116px;
+    flex: 0 0 116px;
+  }
+
+  .ring-wrap .ring-legend {
+    width: 120px;
+    gap: 8px;
+
+    .ring-legend-item {
+      gap: 7px;
+      font-size: 13px;
+      line-height: 20px;
+    }
+  }
+}
+
+.e01-reminder-section {
+  .e01-reminder {
+    display: block;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    border-left: 2px solid #ffb347;
+    border-radius: 3px;
+    outline: none;
+    background: rgba(255, 179, 71, 0.06);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+
+    &:hover,
+    &:focus-visible {
+      border-left-color: #ffd08a;
+      background: rgba(255, 179, 71, 0.12);
+    }
+  }
+
+  .e01-reminder-point {
+    color: var(--text-main);
+    font-size: 14px;
+    line-height: 19px;
+    font-weight: 600;
+  }
+
+  .e01-reminder-message {
+    margin-top: 6px;
+    color: #ffb347;
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .e01-reminder-time {
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 17px;
   }
 }
 

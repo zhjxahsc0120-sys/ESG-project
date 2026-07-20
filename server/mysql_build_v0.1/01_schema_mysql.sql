@@ -380,6 +380,8 @@ CREATE TABLE IF NOT EXISTS env_monitoring_record (
   dust_exceed_count INT NOT NULL DEFAULT 0,
   noise_exceed_count INT NOT NULL DEFAULT 0,
   module_code VARCHAR(10) NOT NULL DEFAULT 'E',
+  initial_detected_value VARCHAR(50) NULL COMMENT '初检值',
+  recheck_detected_value VARCHAR(50) NULL COMMENT '复测值',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_env_monitor_date(monitor_date)
 ) ENGINE=InnoDB COMMENT='环境监测记录';

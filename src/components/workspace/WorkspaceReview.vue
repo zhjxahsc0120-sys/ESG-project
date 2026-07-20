@@ -1,9 +1,43 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Search, Clock, CheckCircle, XCircle, AlertTriangle, ArrowRight, Calendar } from 'lucide-vue-next'
-import { reviewStatusCards as mockReviewStatusCards, reviewRecords as mockReviewRecords, reviewTimeline, reviewRequirements } from '@/data/workspace.mock'
-import { getReviews, getReviewDetail, getReviewTimeline, getReviewRequirements, approveReview, returnReview } from '@/services/api'
-import type { StatusCard, ReviewRecord, ReviewTimeline } from '@/types/workspace'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import {
+  Search,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Archive,
+  ArrowRight,
+  Calendar,
+  User,
+  FileText,
+  AlertTriangle,
+  RotateCcw,
+  ChevronRight,
+} from 'lucide-vue-next'
+import {
+  reviewRecords as mockReviewRecords,
+  reviewTimeline,
+  reviewRequirements,
+} from '@/data/workspace.mock'
+import {
+  getReviews,
+  getReviewDetail,
+  getReviewTimeline,
+  getReviewRequirements,
+  approveReview,
+  returnReview,
+} from '@/services/api'
+import type {
+  StatusCard,
+  ReviewRecord,
+  ReviewTimeline,
+  TaskSourceType,
+  ReviewStatus,
+} from '@/types/workspace'
+import {
+  REVIEW_STATUS_COLORS,
+  MODULE_COLORS,
+} from '@/types/workspace'
 import type { ReviewTimelineApi, ReviewRequirementApi } from '@/services/api'
 import { emitWorkspaceRefresh, onWorkspaceRefresh } from '@/utils/workspaceRefresh'
 
@@ -11,12 +45,14 @@ const emit = defineEmits<{
   (e: 'openTask', taskId: string, forceTab?: string): void
 }>()
 
-const activeTab = ref('全部')
 const searchKeyword = ref('')
 const selectedModule = ref('全部')
+const selectedSourceType = ref('全部')
 const startDate = ref('')
 const endDate = ref('')
-const statusCards = ref<StatusCard[]>([...mockReviewStatusCards])
+const selectedStatus = ref('全部')
+const reviewerFilter = ref('')
+
 const reviewRecordList = ref<ReviewRecord[]>([...mockReviewRecords])
 const selectedRecordId = ref(mockReviewRecords[0]?.id || '')
 const recordTimelines = ref<Record<string, ReviewTimelineApi[]>>({})
@@ -25,7 +61,33 @@ const recordDeadlines = ref<Record<string, string>>({})
 const pageMessage = ref('')
 const pageMessageType = ref<'info' | 'success' | 'error'>('info')
 
+const statusCards = computed<StatusCard[]>(() => {
+  const list = reviewRecordList.value
+  const pending = list.filter(r => r.status === '待审核').length
+  const passed = list.filter(r => r.status === '已通过').length
+  const returned = list.filter(r => r.status === '已退回').length
+  const archived = list.filter(r => r.status === '已归档').length
+  const overdueCorrections = list.filter(r => r.status === '已退回' && r.correctionOverdue).length
+  return [
+    { label: '待审核', value: pending, unit: '项', color: '#2f9cff' },
+    { label: '已通过', value: passed, unit: '项', color: '#69e36f' },
+    { label: '已退回', value: returned, unit: '项', subText: `其中补正逾期 ${overdueCorrections} 项`, color: '#ff4f5e' },
+    { label: '已归档', value: archived, unit: '项', color: '#69e36f' },
+  ]
+})
+
 let stopWorkspaceRefresh: (() => void) | null = null
+
+const sourceTypeOptions: TaskSourceType[] = [
+  'KPI指标',
+  '月报任务',
+  '业务事项',
+  '周期任务',
+  '审核补正',
+  '临时任务',
+]
+
+const statusOptions: ReviewStatus[] = ['待审核', '已通过', '已退回', '已归档']
 
 onMounted(() => {
   loadData()
@@ -44,22 +106,27 @@ onUnmounted(() => {
 async function loadData() {
   const data = await getReviews()
   if (data) {
-    if (data.statusCards && data.statusCards.length > 0) {
-      statusCards.value = data.statusCards as StatusCard[]
-    }
     if (data.items && data.items.length > 0) {
-      reviewRecordList.value = data.items.map(item => ({
-        id: item.id,
-        taskId: item.taskId,
-        taskName: item.taskName,
-        module: item.module,
-        moduleName: item.moduleName,
-        submitTime: item.submitTime,
-        status: item.status,
-        reviewer: item.reviewer,
-        commentSummary: item.commentSummary,
-        nextStep: item.nextStep,
-      })) as ReviewRecord[]
+      reviewRecordList.value = data.items.map((item, index) => {
+        const mockRecord = mockReviewRecords[index] || mockReviewRecords[0]
+        return {
+          id: item.id,
+          taskId: item.taskId,
+          taskName: item.taskName,
+          module: item.module as ReviewRecord['module'],
+          moduleName: item.moduleName,
+          submitTime: item.submitTime,
+          status: item.status as ReviewRecord['status'],
+          reviewer: item.reviewer,
+          commentSummary: item.commentSummary,
+          nextStep: item.nextStep,
+          sourceType: mockRecord.sourceType,
+          sourceName: mockRecord.sourceName,
+          correctionDueDate: mockRecord.correctionDueDate,
+          correctionRemaining: mockRecord.correctionRemaining,
+          correctionOverdue: mockRecord.correctionOverdue,
+        }
+      }) as ReviewRecord[]
     }
   }
 }
@@ -69,52 +136,92 @@ function showMessage(message: string, type: 'info' | 'success' | 'error' = 'info
   pageMessageType.value = type
 }
 
+function formatTime(time: string): string {
+  if (!time) return '-'
+  if (time.includes('T')) {
+    return time.replace('T', ' ').substring(0, 16)
+  }
+  return time.substring(0, 16)
+}
+
+const currentPage = ref(1)
+const pageSize = ref(10)
+
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+}
+
+function changePageSize(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
+function getPageNumbers(): number[] {
+  const pages: number[] = []
+  const maxPages = 5
+  let start = Math.max(1, currentPage.value - Math.floor(maxPages / 2))
+  let end = Math.min(totalPages.value, start + maxPages - 1)
+  if (end - start + 1 < maxPages) {
+    start = Math.max(1, end - maxPages + 1)
+  }
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+}
+
 const filteredRecords = computed(() => {
   return reviewRecordList.value.filter(record => {
-    if (activeTab.value !== '全部' && record.status !== activeTab.value) return false
     if (searchKeyword.value && !record.taskName.includes(searchKeyword.value)) return false
     if (selectedModule.value !== '全部' && record.module !== selectedModule.value) return false
+    if (selectedSourceType.value !== '全部' && record.sourceType !== selectedSourceType.value) return false
+    if (selectedStatus.value !== '全部' && record.status !== selectedStatus.value) return false
+    if (reviewerFilter.value && !record.reviewer.includes(reviewerFilter.value)) return false
     return true
   })
 })
 
-const selectedRecord = computed(() => {
-  return reviewRecordList.value.find(r => r.id === selectedRecordId.value) || reviewRecordList.value[0]
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredRecords.value.length / pageSize.value)))
+
+const paginatedRecords = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredRecords.value.slice(start, start + pageSize.value)
 })
 
-const tabs = ['全部', '待审核', '已通过', '已退回', '已归档']
+watch(filteredRecords, () => {
+  currentPage.value = 1
+})
+
+const selectedRecord = computed(() => {
+  return (
+    reviewRecordList.value.find(r => r.id === selectedRecordId.value) ||
+    reviewRecordList.value[0]
+  )
+})
 
 function getModuleColor(module: string) {
-  switch (module) {
-    case 'E': return '#69e36f'
-    case 'S': return '#2f9cff'
-    case 'G': return '#a66cff'
-    default: return '#8fa9c8'
-  }
+  return MODULE_COLORS[module] || '#8fa9c8'
 }
 
 function getStatusColor(status: string) {
-  switch (status) {
-    case '待审核': return '#2f9cff'
-    case '已通过': return '#69e36f'
-    case '已退回': return '#ff4f5e'
-    case '补正逾期': return '#ffb347'
-    default: return '#8fa9c8'
-  }
+  return REVIEW_STATUS_COLORS[status] || '#8fa9c8'
 }
 
 function getTimelineIcon(action: string) {
   if (action.includes('提交')) return ArrowRight
   if (action.includes('校验')) return CheckCircle
   if (action.includes('退回')) return XCircle
+  if (action.includes('通过')) return CheckCircle
   return Clock
 }
 
 function handleReset() {
   searchKeyword.value = ''
   selectedModule.value = '全部'
+  selectedSourceType.value = '全部'
   startDate.value = ''
   endDate.value = ''
+  selectedStatus.value = '全部'
+  reviewerFilter.value = ''
 }
 
 async function loadReviewDetail(reviewId: string) {
@@ -163,24 +270,35 @@ function getTimelineForRecord(recordId: string): ReviewTimeline[] {
       { time: '2026-08-06 10:20', action: '审核退回（审核人：陈质量）' },
     ],
     r4: [
+      { time: '2026-07-28 16:00', action: '提交上传（陈志强 提交任务）' },
+      { time: '2026-07-28 16:10', action: '完整性校验（系统校验通过，共3/4项资料完整）' },
+      { time: '2026-08-05 14:30', action: '审核退回（审核人：吴质量）' },
+    ],
+    r5: [
       { time: '2026-08-06 09:30', action: '提交上传（赵宇航 提交任务）' },
       { time: '2026-08-06 09:35', action: '完整性校验（系统校验通过）' },
       { time: '2026-08-06 10:00', action: '进入审核队列（等待分配审核人）' },
     ],
-    r5: [
+    r6: [
       { time: '2026-08-05 17:25', action: '提交上传（孙德明 提交任务）' },
       { time: '2026-08-05 17:30', action: '完整性校验（系统校验通过）' },
       { time: '2026-08-06 09:00', action: '进入审核队列（等待分配审核人）' },
     ],
-    r6: [
+    r7: [
       { time: '2026-08-02 10:00', action: '提交上传（赵环保 提交任务）' },
       { time: '2026-08-02 10:10', action: '完整性校验（系统校验通过）' },
       { time: '2026-08-03 14:00', action: '审核通过（审核人：赵环保）' },
     ],
-    r7: [
+    r8: [
       { time: '2026-08-01 16:00', action: '提交上传（张建国 提交任务）' },
       { time: '2026-08-01 16:05', action: '完整性校验（系统校验通过）' },
       { time: '2026-08-03 16:10', action: '审核通过（审核人：赵环保）' },
+    ],
+    r9: [
+      { time: '2026-07-15 10:00', action: '提交上传（王财务 提交任务）' },
+      { time: '2026-07-15 10:10', action: '完整性校验（系统校验通过）' },
+      { time: '2026-07-18 14:00', action: '审核通过（审核人：李主管）' },
+      { time: '2026-07-20 10:00', action: '已归档（归档人：系统）' },
     ],
   }
   return mockTimelines[recordId] || reviewTimeline
@@ -207,12 +325,22 @@ function getRequirementsForRecord(recordId: string): { text: string; status?: st
       { text: '土地权属证明不完整，需补充用地批复文件。', status: '待补正' },
       { text: '临时用地范围图缺失，请补充红线图。', status: '待补正' },
     ],
+    r4: [
+      { text: '整改证据不充分，缺少复查确认记录。', status: '待补正' },
+      { text: '需补充整改前后对比照片。', status: '待补正' },
+    ],
   }
   return mockRequirements[recordId] || []
 }
 
-function getDeadlineForRecord(recordId: string): string {
-  return recordDeadlines.value[recordId] || '2026-08-10 18:00（剩余 3 天 9 小时）'
+function getMissingDocsForRecord(recordId: string): string[] {
+  const mockMissing: Record<string, string[]> = {
+    r1: ['审批签章页', '附件日期核对说明'],
+    r2: ['工资表公章页', '高清扫描件'],
+    r3: ['用地批复文件', '临时用地红线图'],
+    r4: ['复查确认记录', '整改对比照片'],
+  }
+  return mockMissing[recordId] || []
 }
 
 function handleRectify() {
@@ -222,9 +350,26 @@ function handleRectify() {
     r1: 't2',
     r2: 't3',
     r3: 't4',
+    r4: 't4',
   }
   const taskId = record.taskId || taskIdMap[record.id] || 't2'
   emit('openTask', taskId, '审核记录')
+}
+
+function handleViewResult() {
+  showMessage('查看结果功能为原型预留，后续可接入任务详情页面。', 'info')
+}
+
+function handleViewArchive() {
+  showMessage('查看归档资料功能为原型预留，后续可接入资料详情页面。', 'info')
+}
+
+function handleViewProgress() {
+  showMessage('查看进度功能为原型预留，后续可接入审核进度页面。', 'info')
+}
+
+function handleEnterReview() {
+  showMessage('进入审核功能为原型预留，后续可接入审核操作页面。', 'info')
 }
 
 async function handleApprove() {
@@ -239,7 +384,11 @@ async function handleApprove() {
   if (res && res.ok) {
     showMessage(res.message || '审核通过成功', 'success')
     await reloadAll()
-    emitWorkspaceRefresh({ source: 'review-action', scopes: ['summary', 'tasks', 'reviews'], reviewId })
+    emitWorkspaceRefresh({
+      source: 'review-action',
+      scopes: ['summary', 'tasks', 'reviews'],
+      reviewId,
+    })
   } else if (res && !res.ok) {
     showMessage(res.message || '审核通过失败', 'error')
   } else {
@@ -256,16 +405,17 @@ async function handleReturn() {
   const res = await returnReview(reviewId, {
     reviewer: '项目审核人',
     comment: '附件签章和日期信息需补正',
-    requirements: [
-      '请补充资料签章页。',
-      '请重新上传日期清晰的扫描件。',
-    ],
+    requirements: ['请补充资料签章页。', '请重新上传日期清晰的扫描件。'],
   })
 
   if (res && res.ok) {
     showMessage(res.message || '审核退回成功', 'success')
     await reloadAll()
-    emitWorkspaceRefresh({ source: 'review-action', scopes: ['summary', 'tasks', 'reviews'], reviewId })
+    emitWorkspaceRefresh({
+      source: 'review-action',
+      scopes: ['summary', 'tasks', 'reviews'],
+      reviewId,
+    })
   } else if (res && !res.ok) {
     showMessage(res.message || '审核退回失败', 'error')
   } else {
@@ -281,193 +431,490 @@ async function reloadAll() {
   }
 }
 
-function handleViewDetail() {
-  showMessage('查看详情功能为原型预留，后续可接入任务详情页面。', 'info')
+function handleNextStep(record: ReviewRecord) {
+  switch (record.status) {
+    case '待审核':
+      handleEnterReview()
+      break
+    case '已通过':
+      handleViewResult()
+      break
+    case '已退回':
+      handleRectify()
+      break
+    case '已归档':
+      handleViewArchive()
+      break
+  }
+}
+
+function getNextStepText(status: string): string {
+  switch (status) {
+    case '待审核':
+      return '进入审核'
+    case '已通过':
+      return '查看结果'
+    case '已退回':
+      return '进入补正'
+    case '已归档':
+      return '查看归档资料'
+    default:
+      return '查看详情'
+  }
 }
 </script>
 
 <template>
   <div class="workspace-review">
-    <div class="page-header">
-      <div class="page-title">审核结果</div>
-      <div class="page-subtitle">查看提交状态、审核意见与补正要求</div>
+    <div class="ws-page-header">
+      <div class="ws-page-title-group">
+        <div class="ws-page-title">审核管理</div>
+        <div class="ws-page-subtitle">审核资料任务并跟踪退回补正情况</div>
+      </div>
     </div>
 
-    <div v-if="pageMessage" :class="['page-message', pageMessageType]">
+    <div v-if="pageMessage" :class="['ws-page-message', pageMessageType]">
       {{ pageMessage }}
     </div>
 
-    <div class="status-cards">
+    <div class="ws-status-cards cols-4">
       <div
         v-for="card in statusCards"
         :key="card.label"
-        class="status-card"
+        class="ws-status-card with-icon"
         :style="{ '--accent-color': card.color }"
-        @click="activeTab = card.label"
+        @click="selectedStatus = card.label"
       >
-        <div class="card-icon">
-          <Clock v-if="card.label === '待审核'" :size="20" />
-          <CheckCircle v-else-if="card.label === '已通过'" :size="20" />
-          <XCircle v-else-if="card.label === '已退回'" :size="20" />
-          <AlertTriangle v-else-if="card.label === '补正逾期'" :size="20" />
+        <div class="ws-card-icon">
+          <Clock v-if="card.label === '待审核'" :size="18" />
+          <CheckCircle v-else-if="card.label === '已通过'" :size="18" />
+          <XCircle v-else-if="card.label === '已退回'" :size="18" />
+          <Archive v-else-if="card.label === '已归档'" :size="18" />
         </div>
-        <div class="card-label">{{ card.label }}</div>
-        <div class="card-value">{{ card.value }}</div>
-        <div class="card-unit">{{ card.unit }}</div>
+        <div class="ws-card-body">
+          <div class="ws-card-label">{{ card.label }}</div>
+          <div class="ws-card-value-row">
+            <span class="ws-card-value">{{ card.value }}</span>
+            <span class="ws-card-unit">{{ card.unit }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="main-content">
       <div class="left-section">
-        <div class="tab-bar">
-          <button
-            v-for="tab in tabs"
-            :key="tab"
-            :class="{ active: activeTab === tab }"
-            @click="activeTab = tab"
-          >
-            {{ tab }}
-          </button>
+        <div class="filter-panel">
+          <div class="filter-row">
+            <div class="filter-item">
+              <span class="filter-label">任务名称</span>
+              <div class="filter-input-wrap">
+                <Search :size="14" class="filter-icon" />
+                <input v-model="searchKeyword" type="text" placeholder="请输入任务名称" />
+              </div>
+            </div>
+            <div class="filter-item">
+              <span class="filter-label">ESG模块</span>
+              <select v-model="selectedModule">
+                <option value="全部">全部</option>
+                <option value="E">E 环境环保</option>
+                <option value="S">S 社会责任</option>
+                <option value="G">G 治理合规</option>
+              </select>
+            </div>
+            <div class="filter-item">
+              <span class="filter-label">来源类型</span>
+              <select v-model="selectedSourceType">
+                <option value="全部">全部</option>
+                <option v-for="src in sourceTypeOptions" :key="src" :value="src">
+                  {{ src }}
+                </option>
+              </select>
+            </div>
+          </div>
+          <div class="filter-row">
+            <div class="filter-item">
+              <span class="filter-label">提交日期</span>
+              <div class="date-range">
+                <div class="filter-input-wrap">
+                  <Calendar :size="14" class="filter-icon" />
+                  <input v-model="startDate" type="text" placeholder="开始日期" />
+                </div>
+                <span class="date-separator">~</span>
+                <div class="filter-input-wrap">
+                  <Calendar :size="14" class="filter-icon" />
+                  <input v-model="endDate" type="text" placeholder="结束日期" />
+                </div>
+              </div>
+            </div>
+            <div class="filter-item">
+              <span class="filter-label">审核状态</span>
+              <select v-model="selectedStatus">
+                <option value="全部">全部</option>
+                <option v-for="st in statusOptions" :key="st" :value="st">
+                  {{ st }}
+                </option>
+              </select>
+            </div>
+            <div class="filter-item">
+              <span class="filter-label">审核人</span>
+              <div class="filter-input-wrap">
+                <User :size="14" class="filter-icon" />
+                <input v-model="reviewerFilter" type="text" placeholder="请输入审核人" />
+              </div>
+            </div>
+            <button class="reset-btn" @click="handleReset">
+              <RotateCcw :size="14" />
+              重置
+            </button>
+          </div>
         </div>
 
-        <div class="filter-section">
-          <div class="search-box">
-            <Search :size="16" />
-            <input v-model="searchKeyword" type="text" placeholder="搜索任务名称" />
+        <div class="ws-table-container">
+          <div class="ws-table-header-wrapper">
+            <table class="ws-table">
+              <colgroup>
+                <col class="col-task-name" />
+                <col class="col-source" />
+                <col class="col-module" />
+                <col class="col-time" />
+                <col class="col-status" />
+                <col class="col-reviewer" />
+                <col class="col-comment" />
+                <col class="col-action" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>任务名称</th>
+                  <th>来源/关联事项</th>
+                  <th>ESG模块</th>
+                  <th>提交时间</th>
+                  <th>审核状态</th>
+                  <th>审核人</th>
+                  <th>审核意见摘要</th>
+                  <th>下一步</th>
+                </tr>
+              </thead>
+            </table>
           </div>
-          <div class="filter-group">
-            <span class="filter-label">ESG模块</span>
-            <select v-model="selectedModule">
-              <option value="全部">全部</option>
-              <option value="E">E</option>
-              <option value="S">S</option>
-              <option value="G">G</option>
-            </select>
+          <div class="ws-table-body-wrapper">
+            <table class="ws-table">
+              <colgroup>
+                <col class="col-task-name" />
+                <col class="col-source" />
+                <col class="col-module" />
+                <col class="col-time" />
+                <col class="col-status" />
+                <col class="col-reviewer" />
+                <col class="col-comment" />
+                <col class="col-action" />
+              </colgroup>
+              <tbody>
+                <tr
+                  v-for="record in paginatedRecords"
+                  :key="record.id"
+                  :class="{ selected: selectedRecordId === record.id }"
+                  @click="selectedRecordId = record.id; loadReviewDetail(record.id)"
+                >
+                  <td class="col-task-name">
+                    <span class="task-name-text">{{ record.taskName }}</span>
+                  </td>
+                  <td class="col-source">
+                    <div class="source-cell">
+                      <span class="source-type-tag">{{ record.sourceType }}</span>
+                      <span class="source-name" :title="record.sourceName">
+                        {{ record.sourceName || '-' }}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="col-module">
+                    <span
+                      class="module-tag"
+                      :style="{
+                        background: `${getModuleColor(record.module)}20`,
+                        color: getModuleColor(record.module),
+                      }"
+                    >
+                      {{ record.module }} {{ record.moduleName }}
+                    </span>
+                  </td>
+                  <td class="col-time">{{ formatTime(record.submitTime) }}</td>
+                  <td class="col-status">
+                    <span
+                      class="status-tag"
+                      :style="{
+                        background: `${getStatusColor(record.status)}20`,
+                        color: getStatusColor(record.status),
+                      }"
+                    >
+                      {{ record.status }}
+                    </span>
+                  </td>
+                  <td class="col-reviewer">{{ record.reviewer || '-' }}</td>
+                  <td class="col-comment">
+                    <div class="comment-text">{{ record.commentSummary || '-' }}</div>
+                  </td>
+                  <td class="col-action">
+                    <button
+                      class="next-step-btn"
+                      :style="{ color: getStatusColor(record.status) }"
+                      @click.stop="handleNextStep(record)"
+                    >
+                      {{ getNextStepText(record.status) }}
+                      <ChevronRight :size="14" />
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="paginatedRecords.length === 0">
+                  <td colspan="8" class="empty-row">暂无审核记录</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="filter-group">
-            <span class="filter-label">提交时间</span>
-            <input v-model="startDate" type="text" placeholder="开始日期" />
-            <span class="date-separator">~</span>
-            <input v-model="endDate" type="text" placeholder="结束日期" />
-          </div>
-          <button class="reset-btn" @click="handleReset">重置</button>
-        </div>
 
-        <div class="records-table-wrapper">
-          <table class="records-table">
-            <thead>
-              <tr>
-                <th>任务名称</th>
-                <th>ESG模块</th>
-                <th>提交时间</th>
-                <th>审核状态</th>
-                <th>审核人</th>
-                <th>审核意见摘要</th>
-                <th>下一步</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="record in filteredRecords"
-                :key="record.id"
-                class="record-row"
-                :class="{ selected: selectedRecordId === record.id }"
-                @click="selectedRecordId = record.id; loadReviewDetail(record.id)"
+          <div class="ws-pagination-bar">
+            <div class="ws-pagination-info">
+              共 <span class="highlight">{{ filteredRecords.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
+            </div>
+            <div class="ws-pagination-controls">
+              <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
+                <option :value="10">10 条/页</option>
+                <option :value="20">20 条/页</option>
+                <option :value="30">30 条/页</option>
+              </select>
+              <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+              <button
+                v-for="p in getPageNumbers()"
+                :key="p"
+                class="ws-page-btn"
+                :class="{ active: currentPage === p }"
+                @click="goToPage(p)"
               >
-                <td class="task-name">{{ record.taskName }}</td>
-                <td>
-                  <span class="module-tag" :style="{ background: `${getModuleColor(record.module)}20`, color: getModuleColor(record.module) }">
-                    {{ record.module }} {{ record.moduleName }}
-                  </span>
-                </td>
-                <td>{{ record.submitTime }}</td>
-                <td>
-                  <span class="status-tag" :style="{ background: `${getStatusColor(record.status)}20`, color: getStatusColor(record.status) }">
-                    {{ record.status }}
-                  </span>
-                </td>
-                <td>{{ record.reviewer }}</td>
-                <td class="comment-cell">{{ record.commentSummary || '-' }}</td>
-                <td>
-                  <button class="next-step-btn" :style="{ color: getStatusColor(record.status) }">
-                    {{ record.nextStep }}
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="pagination">
-          <button class="prev-btn">‹</button>
-          <span class="current-page">1</span>
-          <button class="next-btn">›</button>
-          <span class="page-size">10 条/页</span>
-          <span class="total-count">共 {{ filteredRecords.length }} 条</span>
+                {{ p }}
+              </button>
+              <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="right-section">
-        <div class="timeline-card">
-          <div class="card-header">
-            <div class="card-title">审核轨迹预览</div>
-          </div>
-          <div class="current-task">
-            <span class="task-name">{{ selectedRecord?.taskName }}</span>
-            <span class="task-status" :style="{ color: getStatusColor(selectedRecord?.status || '') }">{{ selectedRecord?.status }}</span>
-          </div>
-          <div class="timeline">
-            <div v-for="(item, index) in getTimelineForRecord(selectedRecord?.id || '')" :key="index" class="timeline-item">
-              <div class="timeline-dot" :class="{ last: index === getTimelineForRecord(selectedRecord?.id || '').length - 1 }">
-                <component :is="getTimelineIcon(item.action)" :size="14" />
-              </div>
-              <div class="timeline-content">
-                <span class="timeline-time">{{ item.time }}</span>
-                <span class="timeline-action">{{ item.action }}</span>
-              </div>
-            </div>
+        <div class="ws-detail-panel">
+          <div class="ws-detail-header">
+            <FileText :size="18" class="ws-detail-header-icon" />
+            <span class="ws-detail-title">审核详情</span>
           </div>
 
-          <div v-if="selectedRecord?.status === '已退回'" class="requirements-section">
-            <div class="requirements-header">
-              <span class="requirements-title">补正要求（{{ getRequirementsForRecord(selectedRecord?.id || '').length }}条）</span>
+          <div class="ws-detail-content">
+            <div class="ws-detail-section">
+              <div class="ws-section-title">基本信息</div>
+              <div class="info-grid">
+                <div class="info-item">
+                  <span class="info-label">任务名称</span>
+                  <span class="info-value task-name-full">{{ selectedRecord?.taskName }}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">来源类型</span>
+                  <span class="info-value">{{ selectedRecord?.sourceType || '-' }}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">关联事项</span>
+                  <span class="info-value">{{ selectedRecord?.sourceName || '-' }}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">ESG模块</span>
+                  <span
+                    class="module-tag-sm"
+                    :style="{
+                      background: `${getModuleColor(selectedRecord?.module || '')}20`,
+                      color: getModuleColor(selectedRecord?.module || ''),
+                    }"
+                  >
+                    {{ selectedRecord?.module }} {{ selectedRecord?.moduleName }}
+                  </span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">提交时间</span>
+                  <span class="info-value">{{ formatTime(selectedRecord?.submitTime || '') }}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">审核状态</span>
+                  <span
+                    class="status-tag-sm"
+                    :style="{
+                      background: `${getStatusColor(selectedRecord?.status || '')}20`,
+                      color: getStatusColor(selectedRecord?.status || ''),
+                    }"
+                  >
+                    {{ selectedRecord?.status }}
+                  </span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">审核人</span>
+                  <span class="info-value">{{ selectedRecord?.reviewer || '-' }}</span>
+                </div>
+              </div>
             </div>
-            <div class="requirements-list">
-              <div v-for="(req, idx) in getRequirementsForRecord(selectedRecord?.id || '')" :key="idx" class="requirement-item">
-                <span class="requirement-number">{{ idx + 1 }}</span>
-                <span class="requirement-text">{{ req.text }}</span>
-                <span v-if="req.status" :class="['requirement-status', req.status]">
-                  {{ req.status === '待补正' ? '待补正' : '已补正' }}
+
+            <div class="ws-detail-section">
+              <div class="ws-section-title">审核轨迹</div>
+              <div class="timeline">
+                <div
+                  v-for="(item, index) in getTimelineForRecord(selectedRecord?.id || '')"
+                  :key="index"
+                  class="timeline-item"
+                >
+                  <div
+                    class="timeline-dot"
+                    :class="{
+                      last:
+                        index ===
+                        getTimelineForRecord(selectedRecord?.id || '').length - 1,
+                    }"
+                  >
+                    <component :is="getTimelineIcon(item.action)" :size="12" />
+                  </div>
+                  <div class="timeline-content">
+                    <span class="timeline-action">{{ item.action }}</span>
+                    <span class="timeline-time">{{ formatTime(item.time) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="selectedRecord?.status === '已通过' || selectedRecord?.status === '已归档'" class="ws-detail-section">
+              <div class="ws-section-title">审核结论</div>
+              <div class="conclusion-box">
+                <div class="conclusion-text">
+                  {{ selectedRecord?.commentSummary || '资料完整，符合填报要求' }}
+                </div>
+              </div>
+              <div class="conclusion-meta">
+                <div class="meta-item">
+                  <span class="meta-label">审核人</span>
+                  <span class="meta-value">{{ selectedRecord?.reviewer || '-' }}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">审核时间</span>
+                  <span class="meta-value">
+                    {{ formatTime(getTimelineForRecord(selectedRecord?.id || '').find(t => t.action.includes('通过'))?.time || '') }}
+                  </span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">归档状态</span>
+                  <span
+                    class="archive-status"
+                    :class="{ archived: selectedRecord?.status === '已归档' }"
+                  >
+                    {{ selectedRecord?.status === '已归档' ? '已归档' : '待归档' }}
+                  </span>
+                </div>
+              </div>
+              <button
+                v-if="selectedRecord?.status === '已归档'"
+                class="ws-btn ws-btn-primary action-btn"
+                @click="handleViewArchive"
+              >
+                <Archive :size="16" />
+                查看归档资料
+              </button>
+              <button
+                v-else
+                class="ws-btn ws-btn-primary action-btn"
+                @click="handleViewResult"
+              >
+                <CheckCircle :size="16" />
+                查看结果
+              </button>
+            </div>
+
+            <div v-if="selectedRecord?.status === '已退回'" class="ws-detail-section">
+              <div class="ws-section-title">退回原因</div>
+              <div class="return-reason-box">
+                <AlertTriangle :size="16" class="return-icon" />
+                <span class="return-reason-text">
+                  {{ selectedRecord?.commentSummary || '资料不完整，需补正后重新提交' }}
                 </span>
               </div>
             </div>
+
+            <div v-if="selectedRecord?.status === '已退回'" class="ws-detail-section">
+              <div class="ws-section-title">缺失资料</div>
+              <div class="missing-docs-list">
+                <div
+                  v-for="(doc, idx) in getMissingDocsForRecord(selectedRecord?.id || '')"
+                  :key="idx"
+                  class="missing-doc-item"
+                >
+                  <XCircle :size="14" class="missing-icon" />
+                  <span>{{ doc }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="selectedRecord?.status === '已退回'" class="ws-detail-section">
+              <div class="ws-section-title">
+                补正要求
+                <span class="requirement-count">
+                  {{ getRequirementsForRecord(selectedRecord?.id || '').length }} 条
+                </span>
+              </div>
+              <div class="requirements-list">
+                <div
+                  v-for="(req, idx) in getRequirementsForRecord(selectedRecord?.id || '')"
+                  :key="idx"
+                  class="requirement-item"
+                >
+                  <span class="requirement-number">{{ idx + 1 }}</span>
+                  <span class="requirement-text">{{ req.text }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="selectedRecord?.status === '已退回'" class="ws-detail-section">
+              <div class="deadline-card">
+                <div class="deadline-row">
+                  <span class="deadline-label">补正截止时间</span>
+                  <span class="deadline-value">
+                    {{ formatTime(selectedRecord?.correctionDueDate || '2026-08-10 18:00') }}
+                  </span>
+                </div>
+                <div class="deadline-row">
+                  <span class="deadline-label">剩余时间</span>
+                  <span
+                    class="remaining-time"
+                    :class="{ overdue: selectedRecord?.correctionOverdue }"
+                  >
+                    {{ selectedRecord?.correctionRemaining || '剩余 3 天' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="selectedRecord?.status === '待审核'" class="ws-detail-section">
+              <div class="ws-section-title">审核结论</div>
+              <div class="pending-tip">
+                <Clock :size="20" class="pending-icon" />
+                <span>该任务正在等待审核，请耐心等待或进入审核页面处理。</span>
+              </div>
+              <div class="review-actions">
+                <button class="ws-btn ws-btn-danger action-btn return-action" @click="handleReturn">
+                  <XCircle :size="16" />
+                  审核退回
+                </button>
+                <button class="ws-btn ws-btn-primary action-btn approve-action" @click="handleApprove">
+                  <CheckCircle :size="16" />
+                  审核通过
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div v-if="selectedRecord?.status === '已退回'" class="deadline-section">
-            <span class="deadline-label">补正截止时间</span>
-            <span class="deadline-value" style="color: #ff4f5e">{{ getDeadlineForRecord(selectedRecord?.id || '') }}</span>
-          </div>
-
-          <button 
-            v-if="selectedRecord?.status === '已退回'" 
-            class="rectify-btn" 
-            @click="handleRectify"
-          >进入补正</button>
-          <div v-else-if="selectedRecord?.status === '待审核'" class="review-actions">
-            <button class="review-btn return-btn" @click="handleReturn">
-              <XCircle :size="16" />
-              审核退回
-            </button>
-            <button class="review-btn approve-btn" @click="handleApprove">
-              <CheckCircle :size="16" />
-              审核通过
+          <div v-if="selectedRecord?.status === '已退回'" class="ws-detail-footer">
+            <button class="ws-btn ws-btn-warn action-btn" @click="handleRectify">
+              <RotateCcw :size="16" />
+              进入补正
             </button>
           </div>
-          <button 
-            v-else 
-            class="rectify-btn view-btn" 
-            @click="handleViewDetail"
-          >查看详情</button>
         </div>
       </div>
     </div>
@@ -476,375 +923,355 @@ function handleViewDetail() {
 
 <style scoped>
 .workspace-review {
-  padding: 20px;
-  height: calc(100% - 120px);
-  overflow-y: auto;
-}
-
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.page-subtitle {
-  font-size: 13px;
-  color: #8fa9c8;
-  margin-top: 4px;
-}
-
-.page-message {
-  margin: -6px 0 14px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.page-message.info {
-  background: rgba(47, 156, 255, 0.1);
-  border: 1px solid rgba(47, 156, 255, 0.3);
-  color: #9fc7ff;
-}
-
-.page-message.success {
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  color: #69e36f;
-}
-
-.page-message.error {
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  color: #ff4f5e;
-}
-
-.status-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  padding: 14px 16px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  margin-bottom: 20px;
-}
-
-.status-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: center;
-}
-
-.status-card:hover {
-  border-color: var(--accent-color);
-}
-
-.card-icon {
-  color: var(--accent-color);
-  margin-bottom: 6px;
-}
-
-.card-label {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.card-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--accent-color);
-}
-
-.card-unit {
-  font-size: 11px;
-  color: #8fa9c8;
+  overflow: hidden;
 }
 
 .main-content {
   display: flex;
-  gap: 20px;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
 }
 
 .left-section {
-  flex: 1;
+  flex: 0 0 65%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .right-section {
-  width: 400px;
+  flex: 1;
+  min-width: 0;
 }
 
-.tab-bar {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 16px;
-}
-
-.tab-bar button {
-  padding: 8px 20px;
-  background: rgba(5, 26, 50, 0.6);
+.filter-panel {
+  background: rgba(5, 26, 50, 0.8);
   border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 6px;
-  color: #8fa9c8;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
-.tab-bar button.active {
-  background: rgba(255, 79, 94, 0.15);
-  border-color: #ff4f5e;
-  color: #ff4f5e;
-}
-
-.filter-section {
+.filter-row {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 16px;
-  background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  margin-bottom: 16px;
 }
 
-.search-box {
+.filter-row + .filter-row {
+  margin-top: 10px;
+}
+
+.filter-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-label {
+  font-size: 12px;
+  color: #8fa9c8;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.filter-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(105, 227, 111, 0.2);
   border-radius: 6px;
   padding: 6px 10px;
   color: #8fa9c8;
-  min-width: 200px;
+  flex: 1;
+  min-width: 0;
 }
 
-.search-box input {
+.filter-icon {
+  flex-shrink: 0;
+}
+
+.filter-input-wrap input {
   background: transparent;
   border: none;
   color: #e8f3ff;
   font-size: 12px;
   flex: 1;
   outline: none;
+  min-width: 0;
 }
 
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.filter-label {
-  font-size: 12px;
-  color: #8fa9c8;
-}
-
-.filter-group select,
-.filter-group input {
+.filter-item select {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 6px 10px;
   color: #e8f3ff;
   font-size: 12px;
   outline: none;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.date-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .date-separator {
   color: #8fa9c8;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .reset-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 14px;
   background: rgba(105, 227, 111, 0.08);
   border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
+  border-radius: 6px;
   color: #8fa9c8;
   font-size: 12px;
   cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
-.records-table-wrapper {
-  overflow-x: auto;
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
+.reset-btn:hover {
+  color: #69e36f;
+  border-color: rgba(105, 227, 111, 0.4);
 }
 
-.records-table {
-  width: 100%;
-  border-collapse: collapse;
+.ws-table {
+  table-layout: fixed;
 }
 
-.records-table th {
-  text-align: left;
-  padding: 12px 16px;
-  font-size: 12px;
-  color: #8fa9c8;
+.col-task-name {
+  width: 18%;
+}
+
+.col-source {
+  width: 18%;
+}
+
+.col-module {
+  width: 12%;
+}
+
+.col-time {
+  width: 11%;
+}
+
+.col-status {
+  width: 9%;
+}
+
+.col-reviewer {
+  width: 8%;
+}
+
+.col-comment {
+  width: 16%;
+}
+
+.col-action {
+  width: 8%;
+}
+
+.task-name-text {
   font-weight: 500;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.record-row {
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.record-row:hover {
-  background: rgba(105, 227, 111, 0.05);
-}
-
-.record-row.selected {
-  background: rgba(105, 227, 111, 0.1);
-}
-
-.record-row td {
-  padding: 14px 16px;
-  font-size: 13px;
-  color: #e8f3ff;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
-}
-
-.task-name {
-  font-weight: 500;
-}
-
-.module-tag, .status-tag {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.comment-cell {
-  color: #8fa9c8;
-  max-width: 200px;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.source-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.source-type-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  background: rgba(166, 108, 255, 0.15);
+  color: #a66cff;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+.source-name {
+  font-size: 12px;
+  color: #8fa9c8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.module-tag,
+.status-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.comment-text {
+  font-size: 12px;
+  color: #8fa9c8;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.ws-table td.col-action {
+  text-align: center;
+}
+
 .next-step-btn {
-  padding: 6px 14px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.pagination {
-  display: flex;
-  justify-content: flex-end;
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
-}
-
-.prev-btn, .next-btn {
-  width: 28px;
-  height: 28px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  gap: 2px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid currentColor;
   border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 14px;
+  font-size: 12px;
   cursor: pointer;
+  opacity: 0.8;
+  transition: all 0.2s;
+  white-space: nowrap;
 }
 
-.current-page {
-  padding: 6px 12px;
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border-radius: 4px;
-  color: #031020;
+.next-step-btn:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.empty-row {
+  text-align: center;
+  color: #5a7a9a;
+  padding: 40px !important;
   font-size: 12px;
-  font-weight: 600;
 }
 
-.page-size, .total-count {
-  font-size: 12px;
-  color: #8fa9c8;
-}
-
-.timeline-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
+.requirement-count {
+  font-size: 11px;
+  color: #ff4f5e;
+  font-weight: 500;
+  background: rgba(255, 79, 94, 0.15);
+  padding: 2px 8px;
   border-radius: 10px;
-  padding: 16px;
 }
 
-.card-header {
-  margin-bottom: 16px;
-}
-
-.card-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.current-task {
+.info-grid {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.current-task .task-name {
+.info-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.info-label {
+  font-size: 12px;
+  color: #8fa9c8;
+  flex-shrink: 0;
+  width: 70px;
+  padding-top: 1px;
+}
+
+.info-value {
   font-size: 13px;
   color: #e8f3ff;
+  flex: 1;
+  word-break: break-all;
 }
 
-.task-status {
-  font-size: 12px;
-  font-weight: 600;
+.task-name-full {
+  font-weight: 500;
+}
+
+.module-tag-sm,
+.status-tag-sm {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .timeline {
   position: relative;
-  padding-left: 24px;
+  padding-left: 20px;
 }
 
 .timeline::before {
   content: '';
   position: absolute;
-  left: 8px;
-  top: 0;
-  bottom: 0;
+  left: 6px;
+  top: 4px;
+  bottom: 4px;
   width: 2px;
-  background: rgba(105, 227, 111, 0.2);
+  background: rgba(105, 227, 111, 0.15);
 }
 
 .timeline-item {
   display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 14px;
   position: relative;
+}
+
+.timeline-item:last-child {
+  margin-bottom: 0;
 }
 
 .timeline-dot {
   position: absolute;
   left: -20px;
   top: 2px;
-  width: 16px;
-  height: 16px;
-  background: rgba(105, 227, 111, 0.1);
+  width: 14px;
+  height: 14px;
+  background: rgba(5, 26, 50, 0.8);
   border: 2px solid #69e36f;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #69e36f;
+  z-index: 1;
 }
 
 .timeline-dot.last {
@@ -855,7 +1282,14 @@ function handleViewDetail() {
 .timeline-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  flex: 1;
+}
+
+.timeline-action {
+  font-size: 12px;
+  color: #e8f3ff;
+  line-height: 1.4;
 }
 
 .timeline-time {
@@ -863,25 +1297,111 @@ function handleViewDetail() {
   color: #5a7a9a;
 }
 
-.timeline-action {
+.conclusion-box {
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.conclusion-text {
+  font-size: 13px;
+  color: #69e36f;
+  line-height: 1.5;
+}
+
+.conclusion-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.meta-label {
+  font-size: 12px;
+  color: #8fa9c8;
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.meta-value {
+  font-size: 12px;
+  color: #e8f3ff;
+  flex: 1;
+}
+
+.archive-status {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(143, 169, 200, 0.15);
+  color: #8fa9c8;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.archive-status.archived {
+  background: rgba(105, 227, 111, 0.15);
+  color: #69e36f;
+}
+
+.action-btn {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 8px;
+  gap: 6px;
+}
+
+.return-reason-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(255, 79, 94, 0.08);
+  border: 1px solid rgba(255, 79, 94, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.return-icon {
+  color: #ff4f5e;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.return-reason-text {
+  font-size: 13px;
+  color: #ff8894;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.missing-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.missing-doc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
   font-size: 12px;
   color: #e8f3ff;
 }
 
-.requirements-section {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.requirements-header {
-  margin-bottom: 12px;
-}
-
-.requirements-title {
-  font-size: 12px;
+.missing-icon {
   color: #ff4f5e;
-  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .requirements-list {
@@ -893,15 +1413,15 @@ function handleViewDetail() {
 .requirement-item {
   display: flex;
   gap: 10px;
-  padding: 10px;
+  padding: 10px 12px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 6px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .requirement-number {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   background: rgba(255, 79, 94, 0.2);
   border: 1px solid rgba(255, 79, 94, 0.4);
   border-radius: 4px;
@@ -911,6 +1431,7 @@ function handleViewDetail() {
   font-size: 11px;
   color: #ff4f5e;
   flex-shrink: 0;
+  font-weight: 600;
 }
 
 .requirement-text {
@@ -920,35 +1441,22 @@ function handleViewDetail() {
   flex: 1;
 }
 
-.requirement-status {
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-weight: 500;
-  flex-shrink: 0;
+.deadline-card {
+  background: rgba(255, 79, 94, 0.08);
+  border: 1px solid rgba(255, 79, 94, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
 }
 
-.requirement-status.待补正 {
-  background: rgba(255, 179, 71, 0.2);
-  color: #ffb347;
-  border: 1px solid rgba(255, 179, 71, 0.3);
-}
-
-.requirement-status.已补正 {
-  background: rgba(105, 227, 111, 0.2);
-  color: #69e36f;
-  border: 1px solid rgba(105, 227, 111, 0.3);
-}
-
-.deadline-section {
+.deadline-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px;
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.2);
-  border-radius: 8px;
-  margin-top: 16px;
+}
+
+.deadline-row + .deadline-row {
+  margin-top: 8px;
 }
 
 .deadline-label {
@@ -958,58 +1466,75 @@ function handleViewDetail() {
 
 .deadline-value {
   font-size: 12px;
+  color: #e8f3ff;
+  font-weight: 500;
+}
+
+.remaining-time {
+  font-size: 13px;
+  color: #ffb347;
   font-weight: 600;
 }
 
-.rectify-btn {
-  width: 100%;
+.remaining-time.overdue {
+  color: #ff4f5e;
+}
+
+.pending-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   padding: 12px;
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border: none;
+  background: rgba(47, 156, 255, 0.08);
+  border: 1px solid rgba(47, 156, 255, 0.2);
   border-radius: 8px;
-  color: #031020;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  margin-top: 16px;
+  margin-bottom: 16px;
 }
 
-.rectify-btn.view-btn {
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  color: #69e36f;
+.pending-icon {
+  color: #2f9cff;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.pending-tip span {
+  font-size: 12px;
+  color: #9fc7ff;
+  line-height: 1.5;
+  flex: 1;
 }
 
 .review-actions {
   display: flex;
   gap: 12px;
-  margin-top: 16px;
 }
 
-.review-btn {
+.return-action {
   flex: 1;
-  padding: 12px;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-.review-btn:active {
-  transform: scale(0.97);
-  transition-duration: 0.08s;
+.approve-action {
+  flex: 1;
 }
 
-.return-btn {
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  color: #ff4f5e;
+.ws-table-body-wrapper::-webkit-scrollbar,
+.ws-detail-content::-webkit-scrollbar {
+  width: 6px;
 }
 
-.approve-btn {
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  color: #031020;
+.ws-table-body-wrapper::-webkit-scrollbar-track,
+.ws-detail-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ws-table-body-wrapper::-webkit-scrollbar-thumb,
+.ws-detail-content::-webkit-scrollbar-thumb {
+  background: rgba(105, 227, 111, 0.2);
+  border-radius: 3px;
+}
+
+.ws-table-body-wrapper::-webkit-scrollbar-thumb:hover,
+.ws-detail-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(105, 227, 111, 0.3);
 }
 </style>

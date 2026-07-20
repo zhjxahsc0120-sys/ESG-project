@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import type { KpiKey, KpiDetailConfig } from '@/types/dashboard'
+import { useRouter } from 'vue-router'
+import type { KpiKey, KpiDetailConfig, KpiModalFocusContext } from '@/types/dashboard'
 import { kpiDetails, carbonTopicDetail, monthlyTopicDetail } from '@/data/dashboard.mock'
 import { getDashboardKpiDetail, getDashboardTopic } from '@/services/api'
 import HeaderNav from '@/components/layout/HeaderNav.vue'
@@ -13,6 +14,8 @@ import CarbonBenefitPanel from '@/components/panels/CarbonBenefitPanel.vue'
 import MonthlyReportPanel from '@/components/panels/MonthlyReportPanel.vue'
 import ConstructionTimeline from '@/components/panels/ConstructionTimeline.vue'
 import KpiDetailModal from '@/components/modal/KpiDetailModal.vue'
+
+const router = useRouter()
 
 const SCREEN_WIDTH = 1920
 const SCREEN_HEIGHT = 1080
@@ -44,6 +47,7 @@ function handleResize() {
 const activeKpiKey = ref<KpiKey | null>(null)
 const activeTopicDetail = ref<KpiDetailConfig | null>(null)
 const apiKpiDetails = ref<Partial<Record<KpiKey, KpiDetailConfig>>>({})
+const kpiFocusContext = ref<KpiModalFocusContext | null>(null)
 
 const isKpiModalOpen = computed(() => activeKpiKey.value !== null || activeTopicDetail.value !== null)
 const activeDetail = computed(() => {
@@ -63,10 +67,38 @@ async function handleKpiSelect(key: string) {
         apiKpiDetails.value[kpiKey] = detail
       }
     }
+    kpiFocusContext.value = null
     activeKpiKey.value = kpiKey
     activeTopicDetail.value = null
     lockBodyScroll()
   }
+}
+
+async function openKpiFromBusinessLink(payload: {
+  targetType: 'E02' | 'S02'
+  sourceId: string
+  sourceTable?: string
+  gisFeatureId?: string
+  title?: string
+}) {
+  const kpiKey = payload.targetType as KpiKey
+  if (!kpiDetails[kpiKey]) return
+  if (kpiKey !== 'S01') {
+    const detail = await getDashboardKpiDetail(kpiKey)
+    if (detail) {
+      apiKpiDetails.value[kpiKey] = detail
+    }
+  }
+  kpiFocusContext.value = {
+    sourceId: payload.sourceId,
+    sourceTable: payload.sourceTable,
+    gisFeatureId: payload.gisFeatureId,
+    from: 'gis',
+    title: payload.title,
+  }
+  activeKpiKey.value = kpiKey
+  activeTopicDetail.value = null
+  lockBodyScroll()
 }
 
 async function handleTopicSelect(topicKey: string) {
@@ -77,13 +109,23 @@ async function handleTopicSelect(topicKey: string) {
   } else {
     return
   }
+  kpiFocusContext.value = null
   activeKpiKey.value = null
   lockBodyScroll()
+}
+
+function handleNavClick(key: string) {
+  if (key === 'dashboard') {
+    // already here
+  } else if (key === 'assistant') {
+    router.push('/assistant')
+  }
 }
 
 function handleCloseModal() {
   activeKpiKey.value = null
   activeTopicDetail.value = null
+  kpiFocusContext.value = null
   unlockBodyScroll()
 }
 
@@ -127,7 +169,7 @@ onUnmounted(() => {
     >
       <div class="dashboard-page">
         <div class="dashboard-header">
-          <HeaderNav />
+          <HeaderNav active-key="dashboard" @navigate="handleNavClick" />
         </div>
         <div class="dashboard-kpi">
           <TopKpiGroups @select="handleKpiSelect" />
@@ -135,7 +177,7 @@ onUnmounted(() => {
         <div class="dashboard-body">
           <div class="dashboard-left">
             <div class="dashboard-gis">
-              <GisOverviewCesiumPanel v-if="gisConfig.useRealGisOnDashboard" />
+              <GisOverviewCesiumPanel v-if="gisConfig.useRealGisOnDashboard" @open-kpi-source="openKpiFromBusinessLink" />
               <GisOverviewPanel v-else />
             </div>
             <div class="dashboard-timeline">
@@ -156,7 +198,7 @@ onUnmounted(() => {
         </div>
 
         <Teleport to="body">
-          <KpiDetailModal v-if="isKpiModalOpen && activeDetail" :detail="activeDetail" @close="handleCloseModal" />
+          <KpiDetailModal v-if="isKpiModalOpen && activeDetail" :detail="activeDetail" :focus-context="kpiFocusContext" @close="handleCloseModal" />
         </Teleport>
       </div>
     </div>

@@ -2,7 +2,11 @@
 import { defineAsyncComponent } from 'vue'
 import { gisConfig } from '@/config/gis.config'
 import PanelCard from '@/components/layout/PanelCard.vue'
-import { MapPinned } from 'lucide-vue-next'
+import type { GisBusinessLinkOpenPayload } from '@/modules/traffic-gis-overview/types'
+
+const emit = defineEmits<{
+  openKpiSource: [payload: GisBusinessLinkOpenPayload]
+}>()
 
 const TrafficGisOverview = defineAsyncComponent(() =>
   import('@/modules/traffic-gis-overview').then((module) => module.TrafficGisOverview)
@@ -10,14 +14,17 @@ const TrafficGisOverview = defineAsyncComponent(() =>
 </script>
 
 <template>
-  <PanelCard title="GIS 地图主视觉（空间态势 + 时序影像）" :icon="MapPinned">
+  <PanelCard flush>
     <div class="dashboard-gis-cesium-panel">
       <TrafficGisOverview
         :project-id="gisConfig.projectId"
         :data-mode="gisConfig.dashboardDataMode"
         :show-legend="true"
         :show-mode-switch="true"
+        :show-config-button="false"
         :interaction-enabled="true"
+        presentation-mode="dashboard"
+        @open-kpi-source="(payload) => emit('openKpiSource', payload)"
       />
     </div>
   </PanelCard>
@@ -30,6 +37,5 @@ const TrafficGisOverview = defineAsyncComponent(() =>
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  border-radius: 10px;
 }
 </style>
