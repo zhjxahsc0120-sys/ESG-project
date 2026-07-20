@@ -14,7 +14,7 @@ const navItems = [
   { key: 'workspace', label: '工作台首页' },
   { key: 'tasks', label: '我的上传任务' },
   { key: 'smart-upload', label: 'ESG智能入库' },
-  { key: 'review', label: '审核结果' },
+  { key: 'review', label: '审核管理' },
   { key: 'documents', label: '资料中心与档案' },
 ]
 

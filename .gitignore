@@ -44,3 +44,14 @@ Desktop.ini
 coverage/
 .nyc_output/
 *.tsbuildinfo
+
+# Local process and generated runtime files
+server/server.pid
+vite.config.ts.timestamp-*.mjs
+
+# Local backups and visual acceptance artifacts
+backup-*/
+dist-backup*/
+artifacts/
+screenshots/
+screenshot-*.png

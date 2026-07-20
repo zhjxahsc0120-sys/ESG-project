@@ -6,6 +6,8 @@ from urllib.request import urlopen
 
 
 BASE_URL = "http://127.0.0.1:8765"
+VALID_STATUSES = {"待提交", "待确认", "待补正", "校验通过", "不适用"}
+PLACEHOLDER_NAMES = {"张三", "李四", "王五", "赵六", "钱七", "孙八"}
 
 
 def get_json(path: str) -> dict:
@@ -18,34 +20,83 @@ def assert_true(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def summary_value(items: list[dict], label: str):
-    for item in items:
-        if item.get("label") == label:
-            return item.get("value")
-    raise AssertionError(f"summary label missing: {label}")
-
-
 def main() -> int:
+    overview = get_json("/api/monthly/report-overview?reportMonth=2026-07")
+    assert_true(overview["sourceMode"] == "mysql", "overview must use MySQL")
+    assert_true(overview["isMock"] is False, "overview must not be mock")
+    assert_true(overview["dataNature"] == "demo", "demo dataset must be labelled")
+    assert_true(overview["readinessRate"] == 82, "readiness rate mismatch")
+    assert_true(overview["summary"] == {
+        "collectedCount": 18,
+        "totalCount": 22,
+        "pendingSubmitCount": 1,
+        "pendingConfirmCount": 1,
+        "pendingCorrectionCount": 2,
+        "pendingTotal": 4,
+        "notApplicableCount": 0,
+    }, "summary mismatch")
+    assert_true(len(overview["taskInstances"]) == 22, "task count mismatch")
+    assert_true(len(overview["pendingTasks"]) == 4, "pending task count mismatch")
+    passed_tasks = [item for item in overview["taskInstances"] if item["status"] == "校验通过"]
+    pending_tasks = [item for item in overview["taskInstances"] if item["status"] != "校验通过"]
+    assert_true(len(passed_tasks) == 18, "passed task count mismatch")
+    assert_true(all(
+        item["requiredMaterialCount"] == 1
+        and item["linkedMaterialCount"] == 1
+        and len(item["linkedMaterials"]) == 1
+        and item["linkedMaterials"][0]["id"]
+        and item["linkedMaterials"][0]["documentName"]
+        and item["validationResult"] == "校验通过"
+        and item["lastValidationAt"]
+        and item["materialChain"]["status"] == "LINKED"
+        for item in passed_tasks
+    ), "passed task material/validation chain mismatch")
+    assert_true(all(
+        item["linkedMaterialCount"] == 0
+        and item["linkedMaterials"] == []
+        and item["materialChain"]["status"] == "UNLINKED"
+        for item in pending_tasks
+    ), "pending task data must remain unchanged")
+    assert_true(
+        {item["taskType"]: item["count"] for item in overview["taskTypeCounts"]}
+        == {"MONTHLY_FIXED": 16, "CONDITIONAL": 4, "PERIODIC_REFERENCE": 2},
+        "task type counts mismatch",
+    )
+    assert_true(
+        {item["status"]: item["count"] for item in overview["statusCounts"]}
+        == {"待提交": 1, "待确认": 1, "待补正": 2, "校验通过": 18, "不适用": 0},
+        "status counts mismatch",
+    )
+    assert_true(
+        {item["status"] for item in overview["taskInstances"]} <= VALID_STATUSES,
+        "legacy status leaked from the API",
+    )
+    assert_true(
+        not any(item.get("responsibleUserName") in PLACEHOLDER_NAMES for item in overview["taskInstances"]),
+        "placeholder person name leaked from the API",
+    )
+    assert_true(
+        all(item.get("responsibleRole") and item.get("responsibleUserId") is None
+            and item.get("responsibleUserName") is None for item in overview["taskInstances"]),
+        "responsibility fallback contract mismatch",
+    )
+    assert_true(overview["deadlineRange"] == {"start": "2026-08-02", "end": "2026-08-05"}, "deadline range mismatch")
+
+    alias = get_json("/api/monthly/readiness?reportMonth=2026-07")
+    assert_true(alias["summary"] == overview["summary"], "readiness alias mismatch")
+
     topic = get_json("/api/dashboard/topics/monthly-report")
-    assert_true("monthly_report_cycle" in topic.get("dataSource", ""), "monthly topic should come from monthly report tables")
-    assert_true(summary_value(topic.get("summary", []), "月报完成度") == 82, "monthly completion mismatch")
-    assert_true(summary_value(topic.get("summary", []), "待补资料") == 6, "monthly gap count mismatch")
-    assert_true(summary_value(topic.get("summary", []), "待确认") == 4, "monthly pending confirm mismatch")
-    assert_true(summary_value(topic.get("summary", []), "预计完成") == "7月12日", "monthly expected date mismatch")
+    assert_true(topic["sourceMode"] == "mysql" and topic["isMock"] is False, "homepage topic source mismatch")
+    assert_true(topic["completeness"] == "82%", "homepage topic readiness mismatch")
+    assert_true(len(topic["topicData"]["chapters"]["list"]) == 22, "homepage topic must expose 22 tasks")
+    assert_true(len(topic["detailData"]) == 4, "homepage topic must expose 4 pending tasks")
+    assert_true(
+        {item["key"]: item["value"] for item in topic["topicData"]["progress"]["groups"]}
+        == {"E": 88, "S": 100, "G": 67},
+        "homepage E/S/G progress must be derived from task facts",
+    )
 
-    topic_data = topic.get("topicData", {})
-    progress = topic_data.get("progress", {})
-    chapters = topic_data.get("chapters", {})
-    chain = topic_data.get("statusChain", [])
-
-    groups = {item.get("key"): item.get("value") for item in progress.get("groups", [])}
-    assert_true(groups == {"E": 85, "S": 78, "G": 83}, f"monthly progress groups mismatch: {groups}")
-    assert_true(len(chapters.get("list", [])) == 6, "monthly chapter row count mismatch")
-    assert_true(len(topic.get("detailData", [])) == 6, "monthly gap detail row count mismatch")
-    assert_true([item.get("status") for item in chain] == ["completed", "completed", "active", "pending", "pending"], "monthly status chain mismatch")
-    assert_true(topic.get("completeness") == "82%", "monthly completeness text mismatch")
-
-    print("[PASS] 月报准备与输出专题 MySQL 业务表聚合验收通过。")
+    print("[PASS] 月报新版MySQL聚合、兼容接口与首页专题回归通过。")
     return 0
 
 
@@ -53,5 +104,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"[FAIL] 月报准备与输出专题 MySQL 业务表聚合验收失败：{exc}", file=sys.stderr)
+        print(f"[FAIL] 月报新版接口验收失败：{exc}", file=sys.stderr)
         raise SystemExit(1)

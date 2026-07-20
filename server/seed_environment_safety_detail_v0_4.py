@@ -27,6 +27,8 @@ def ensure_columns() -> None:
     add_column_if_missing("env_monitoring_record", "monitor_point", "VARCHAR(255) NULL COMMENT '监测点'")
     add_column_if_missing("env_monitoring_record", "factor_name", "VARCHAR(100) NULL COMMENT '监测因子'")
     add_column_if_missing("env_monitoring_record", "detected_value", "VARCHAR(50) NULL COMMENT '检测值'")
+    add_column_if_missing("env_monitoring_record", "initial_detected_value", "VARCHAR(50) NULL COMMENT '初检值'")
+    add_column_if_missing("env_monitoring_record", "recheck_detected_value", "VARCHAR(50) NULL COMMENT '复测值'")
     add_column_if_missing("env_monitoring_record", "limit_value", "VARCHAR(50) NULL COMMENT '标准限值'")
     add_column_if_missing("env_monitoring_record", "exceed_multiple", "DECIMAL(10,2) NULL COMMENT '超标倍数'")
     add_column_if_missing("env_monitoring_record", "recheck_status", "VARCHAR(30) NULL COMMENT '复测状态'")
@@ -53,14 +55,15 @@ def seed_rows() -> None:
                 """
                 INSERT INTO env_monitoring_record
                 (id, monitor_date, monitor_type, exceed_count, dust_exceed_count, noise_exceed_count,
-                 monitor_point, factor_name, detected_value, limit_value, exceed_multiple, recheck_status,
+                 monitor_point, factor_name, detected_value, initial_detected_value, recheck_detected_value,
+                 limit_value, exceed_multiple, recheck_status,
                  module_code, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'E', %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'E', %s)
                 """,
                 [
-                    (410001, "2026-07-05", "噪声", 1, 0, 1, "K12+000 路基监测点", "噪声/昼间等效声级", "68.2 dB(A)", "70 dB(A)", 0.97, "已复测", "2026-07-05 10:00:00"),
-                    (410002, "2026-07-08", "扬尘", 1, 1, 0, "K18+500 弃渣场监测点", "扬尘/PM10", "185 μg/m³", "150 μg/m³", 1.23, "待复测", "2026-07-08 10:00:00"),
-                    (410003, "2026-06-25", "噪声", 0, 0, 0, "K24+000 桥梁施工点", "噪声/夜间等效声级", "52 dB(A)", "55 dB(A)", 0.95, "正常", "2026-06-25 10:00:00"),
+                    (410001, "2026-07-05", "噪声", 1, 0, 1, "K12+000 路基监测点", "噪声/昼间等效声级", None, None, "68.2 dB(A)", "70 dB(A)", None, "复测达标", "2026-07-05 10:00:00"),
+                    (410002, "2026-07-08", "扬尘", 1, 1, 0, "K18+500 弃渣场监测点", "扬尘/PM10", "185 μg/m³", "185 μg/m³", None, "150 μg/m³", 1.23, "待复测", "2026-07-08 10:00:00"),
+                    (410003, "2026-06-25", "噪声", 0, 0, 0, "K24+000 桥梁施工点", "噪声/夜间等效声级", "52 dB(A)", "52 dB(A)", None, "55 dB(A)", 0.95, "正常", "2026-06-25 10:00:00"),
                 ],
             )
 

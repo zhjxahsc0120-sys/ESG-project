@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Upload, FolderOpen, Send, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { Upload, FolderOpen, Send, ChevronLeft, ChevronRight, Layers, Sparkles } from 'lucide-vue-next'
 import {
   workspaceStatusCards as mockWorkspaceStatusCards,
   allUploadTasks,
   todayFocusList,
   quickQuestions,
 } from '@/data/workspace.mock'
-import { getWorkspaceSummary, getWorkspaceTasks } from '@/services/api'
 import type { UploadTask, StatusCard } from '@/types/workspace'
-import { onWorkspaceRefresh } from '@/utils/workspaceRefresh'
+import { TASK_STATUS_COLORS, MODULE_COLORS, STATUS_TO_NEXT_STEP } from '@/types/workspace'
 
 const emit = defineEmits<{
   (e: 'navigate', key: string, status?: string): void
@@ -22,53 +21,17 @@ const currentPage = ref(1)
 const pageSize = 10
 const taskList = ref<UploadTask[]>([...allUploadTasks])
 const statusCards = ref<StatusCard[]>([...mockWorkspaceStatusCards])
-
-let stopWorkspaceRefresh: (() => void) | null = null
-
-onMounted(() => {
-  loadData()
-  stopWorkspaceRefresh = onWorkspaceRefresh(payload => {
-    if (payload.scopes.some(scope => ['summary', 'tasks'].includes(scope))) {
-      loadData()
-    }
-  })
-})
-
-onUnmounted(() => {
-  stopWorkspaceRefresh?.()
-})
-
-async function loadData() {
-  const [summaryRes, tasksRes] = await Promise.all([
-    getWorkspaceSummary(),
-    getWorkspaceTasks(),
-  ])
-  
-  if (summaryRes) {
-    statusCards.value = [
-      { label: '当前待办', value: summaryRes.currentTodo, unit: '项', color: '#8fa9c8' },
-      { label: '待上传', value: summaryRes.pendingUpload, unit: '项', color: '#2f9cff' },
-      { label: '待补正', value: summaryRes.pendingCorrection, unit: '项', color: '#ffb347' },
-      { label: '待提交', value: summaryRes.pendingSubmit, unit: '项', color: '#a66cff' },
-      { label: '审核中', value: summaryRes.underReview, unit: '项', color: '#a66cff' },
-      { label: '已完成', value: summaryRes.completed, unit: '项', color: '#69e36f' },
-    ]
-  }
-  
-  if (tasksRes && tasksRes.items && tasksRes.items.length > 0) {
-    taskList.value = tasksRes.items.map(item => ({
-      ...item,
-      daysOverdue: undefined,
-      priorityCode: item.priorityCode || 'NORMAL',
-    })) as UploadTask[]
-  }
-}
+const showAssistantResult = ref(false)
+const assistantResultTasks = ref<UploadTask[]>([])
 
 function handleStatusCardClick(label: string) {
   let status = ''
-  if (label === '待上传') status = '待上传'
+  if (label === '当前待办') status = 'todo'
+  else if (label === '待上传') status = '待上传'
   else if (label === '待补正') status = '待补正'
   else if (label === '待提交') status = '待提交'
+  else if (label === '审核中') status = '审核中'
+  else if (label === '已完成') status = '已完成'
   emit('navigate', 'tasks', status)
 }
 
@@ -80,81 +43,91 @@ function handleBatchImport() {
   emit('navigate', 'smart-upload')
 }
 
+function handleReuseFromLibrary() {
+  emit('navigate', 'documents')
+}
+
 function handleTaskClick(taskId: string) {
   emit('openTask', taskId)
 }
 
 function handleQuickQuestion(question: string) {
   inputValue.value = question
-  assistantMessage.value = ''
+  showAssistantResult.value = true
+
+  if (question.includes('今天') || question.includes('必须提交')) {
+    assistantResultTasks.value = taskList.value.filter(t =>
+      t.status === '待提交' || t.isUrgent
+    ).slice(0, 5)
+  } else if (question.includes('逾期')) {
+    assistantResultTasks.value = taskList.value.filter(t => t.isOverdue).slice(0, 5)
+  } else if (question.includes('退回') || question.includes('补正')) {
+    assistantResultTasks.value = taskList.value.filter(t =>
+      t.status === '待补正' || t.status === '已退回'
+    ).slice(0, 5)
+  } else if (question.includes('月报')) {
+    assistantResultTasks.value = taskList.value.filter(t =>
+      t.relatedReport?.includes('7月') && t.status !== '已完成' && t.status !== '已归档'
+    ).slice(0, 5)
+  }
 }
 
 function handleSend() {
   if (!inputValue.value.trim()) return
-  assistantMessage.value = `已收到问题「${inputValue.value}」。智能助手能力为原型预留，暂未接入真实 AI 问答服务。`
-  inputValue.value = ''
+  showAssistantResult.value = true
+  assistantResultTasks.value = taskList.value.slice(0, 3)
 }
 
 function getModuleColor(module: string) {
-  switch (module) {
-    case 'E': return '#69e36f'
-    case 'S': return '#2f9cff'
-    case 'G': return '#a66cff'
-    default: return '#8fa9c8'
-  }
+  return MODULE_COLORS[module] || '#8fa9c8'
 }
 
 function getStatusColor(status: string) {
-  switch (status) {
-    case '待上传': return '#2f9cff'
-    case '待补正': return '#ffb347'
-    case '待提交': return '#a66cff'
-    case '审核退回': return '#ff4f5e'
-    default: return '#8fa9c8'
+  return TASK_STATUS_COLORS[status] || '#8fa9c8'
+}
+
+function getSourceDisplay(task: UploadTask): string {
+  if (task.sourceType === 'KPI指标' && task.sourceKpiCode) {
+    return `${task.sourceKpiCode}｜${task.sourceKpiName || ''}`
   }
+  if (task.sourceType === '月报任务') {
+    return task.relatedReport || task.sourceName || '月报任务'
+  }
+  if (task.sourceType === '审核补正') {
+    return '审核退回补正'
+  }
+  return task.sourceName || task.sourceType || '周期任务'
 }
 
 const statusPriority: Record<string, number> = {
   '已逾期': 0,
-  '审核退回': 1,
-  '即将到期': 2,
-  '待补正': 3,
-  '待上传': 4,
+  '待补正_urgent': 1,
+  '月报_待提交': 2,
+  '待上传': 3,
+  '待补正': 4,
   '待提交': 5,
+  '审核中': 6,
+}
+
+function getTaskPriority(task: UploadTask): number {
+  if (task.isOverdue) return statusPriority['已逾期']
+  if (task.status === '待补正' && task.isUrgent) return statusPriority['待补正_urgent']
+  if (task.relatedReport && task.status === '待提交') return statusPriority['月报_待提交']
+  return statusPriority[task.status] ?? 9
 }
 
 const sortedTasks = computed(() => {
   return [...taskList.value].sort((a, b) => {
-    const aType = a.daysOverdue ? '已逾期' : a.status
-    const bType = b.daysOverdue ? '已逾期' : b.status
-    const aPriority = statusPriority[aType] ?? 9
-    const bPriority = statusPriority[bType] ?? 9
+    const aPriority = getTaskPriority(a)
+    const bPriority = getTaskPriority(b)
     if (aPriority !== bPriority) return aPriority - bPriority
     return new Date(a.deadline).getTime() - new Date(b.deadline).getTime()
   })
 })
 
-const totalPages = computed(() => Math.ceil(sortedTasks.value.length / pageSize))
-
-const paginatedTasks = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return sortedTasks.value.slice(start, start + pageSize)
+const displayTasks = computed(() => {
+  return sortedTasks.value.slice(0, 10)
 })
-
-watch(sortedTasks, () => {
-  currentPage.value = 1
-})
-
-function goToPage(page: number) {
-  if (page < 1 || page > totalPages.value) return
-  currentPage.value = page
-}
-
-function getPageNumbers() {
-  const pages: number[] = []
-  for (let i = 1; i <= totalPages.value; i++) pages.push(i)
-  return pages
-}
 
 function getFocusTypeClass(type: string) {
   switch (type) {
@@ -164,39 +137,57 @@ function getFocusTypeClass(type: string) {
     default: return 'normal'
   }
 }
+
+function handleFocusClick(focusId: string) {
+  emit('openTask', focusId)
+}
 </script>
 
 <template>
   <div class="workspace-home">
     <div class="main-content">
-      <div class="status-cards">
+      <div class="ws-page-header">
+        <div class="ws-page-title-group">
+          <div class="ws-page-title">工作台首页</div>
+          <div class="ws-page-subtitle">查看待办任务、上传资料与重点提醒</div>
+        </div>
+      </div>
+      <div class="ws-status-cards cols-6">
         <div
           v-for="card in statusCards"
           :key="card.label"
-          class="status-card"
+          class="ws-status-card"
           :style="{ '--accent-color': card.color }"
           @click="handleStatusCardClick(card.label)"
         >
-          <div class="card-label">{{ card.label }}</div>
-          <div class="card-value">{{ card.value }}</div>
-          <div class="card-unit">{{ card.unit }}</div>
-          <div v-if="card.subText" class="card-subtext">{{ card.subText }}</div>
+          <span class="ws-card-label">{{ card.label }}</span>
+          <div class="ws-card-value-row">
+            <span class="ws-card-value">{{ card.value }}</span>
+            <span class="ws-card-unit">{{ card.unit }}</span>
+          </div>
         </div>
       </div>
 
       <div class="smart-upload-section">
-        <div class="section-header">
-          <div class="section-title">ESG 智能入库</div>
-          <div class="section-subtitle">上传新资料，智能解析并匹配待办任务</div>
+        <div class="smart-upload-left">
+          <div class="section-title">
+            <Sparkles :size="16" class="title-icon" />
+            <span>ESG 智能入库</span>
+          </div>
+          <div class="section-subtitle">上传后自动识别资料类型、所属周期、关联指标和待办任务</div>
         </div>
         <div class="upload-buttons">
           <button class="upload-btn primary" @click="handleUploadClick">
-            <Upload :size="18" />
+            <Upload :size="16" />
             <span>上传文件</span>
           </button>
           <button class="upload-btn" @click="handleBatchImport">
-            <FolderOpen :size="18" />
+            <FolderOpen :size="16" />
             <span>批量导入</span>
+          </button>
+          <button class="upload-btn" @click="handleReuseFromLibrary">
+            <Layers :size="16" />
+            <span>从资料中心复用</span>
           </button>
         </div>
       </div>
@@ -204,71 +195,79 @@ function getFocusTypeClass(type: string) {
       <div class="tasks-section">
         <div class="section-header">
           <div class="section-title">我的上传任务</div>
+          <div class="section-more" @click="emit('navigate', 'tasks')">查看全部 →</div>
         </div>
-        <div class="tasks-table-wrapper">
-          <table class="tasks-table">
-            <thead>
-              <tr>
-                <th>任务名称</th>
-                <th>ESG模块</th>
-                <th>截止时间</th>
-                <th>资料进度</th>
-                <th>状态</th>
-                <th>下一步</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="task in paginatedTasks"
-                :key="task.id"
-                class="task-row"
-                @click="handleTaskClick(task.id)"
-              >
-                <td class="task-name">{{ task.name }}</td>
-                <td>
-                  <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
-                    {{ task.module }} {{ task.moduleName }}
-                  </span>
-                </td>
-                <td :class="{ 'overdue': task.daysOverdue }">{{ task.deadlineDisplay }}</td>
-                <td>
-                  <div class="progress-bar">
-                    <div class="progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
-                  </div>
-                  <span class="progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
-                </td>
-                <td>
-                  <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
-                    {{ task.status }}
-                  </span>
-                </td>
-                <td>
-                  <button class="next-step-btn" @click.stop="handleTaskClick(task.id)">
-                    {{ task.nextStep }}
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="pagination">
-          <div class="pagination-info">共 {{ sortedTasks.length }} 项，每页 {{ pageSize }} 项</div>
-          <div class="pagination-controls">
-            <button class="page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
-              <ChevronLeft :size="16" />
-            </button>
-            <button
-              v-for="p in getPageNumbers()"
-              :key="p"
-              class="page-btn"
-              :class="{ active: currentPage === p }"
-              @click="goToPage(p)"
-            >
-              {{ p }}
-            </button>
-            <button class="page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
-              <ChevronRight :size="16" />
-            </button>
+        <div class="ws-table-container">
+          <div class="ws-table-header-wrapper">
+            <table class="ws-table">
+              <colgroup>
+                <col style="width: 22%" />
+                <col style="width: 24%" />
+                <col style="width: 10%" />
+                <col style="width: 14%" />
+                <col style="width: 14%" />
+                <col style="width: 10%" />
+                <col style="width: 10%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>任务名称</th>
+                  <th>来源/关联事项</th>
+                  <th>ESG模块</th>
+                  <th>截止时间</th>
+                  <th>资料进度</th>
+                  <th>状态</th>
+                  <th>下一步</th>
+                </tr>
+              </thead>
+            </table>
+          </div>
+          <div class="ws-table-body-wrapper no-scroll">
+            <table class="ws-table">
+              <colgroup>
+                <col style="width: 22%" />
+                <col style="width: 24%" />
+                <col style="width: 10%" />
+                <col style="width: 14%" />
+                <col style="width: 14%" />
+                <col style="width: 10%" />
+                <col style="width: 10%" />
+              </colgroup>
+              <tbody>
+                <tr
+                  v-for="task in displayTasks"
+                  :key="task.id"
+                  @click="handleTaskClick(task.id)"
+                >
+                  <td class="task-name">{{ task.name }}</td>
+                  <td class="task-source">{{ getSourceDisplay(task) }}</td>
+                  <td>
+                    <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
+                      {{ task.module }} {{ task.moduleName }}
+                    </span>
+                  </td>
+                  <td :class="{ 'overdue': task.isOverdue }">{{ task.deadlineDisplay }}</td>
+                  <td>
+                    <div class="progress-cell">
+                      <div class="progress-bar">
+                        <div class="progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
+                      </div>
+                      <span class="progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
+                      {{ task.status }}
+                    </span>
+                  </td>
+                  <td>
+                    <button class="next-step-btn" @click.stop="handleTaskClick(task.id)">
+                      {{ task.nextStep }}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -277,9 +276,11 @@ function getFocusTypeClass(type: string) {
     <aside class="right-sidebar">
       <div class="assistant-card">
         <div class="card-header">
-          <div class="card-title">ESG 智能助手</div>
+          <div class="card-title">
+            <Sparkles :size="14" class="title-icon" />
+            <span>ESG 智能助手</span>
+          </div>
         </div>
-        <div class="greeting">Hi，项目管理员</div>
         <div class="input-wrapper">
           <input
             v-model="inputValue"
@@ -289,11 +290,20 @@ function getFocusTypeClass(type: string) {
             @keyup.enter="handleSend"
           />
           <button class="send-btn" @click="handleSend">
-            <Send :size="16" />
+            <Send :size="15" />
           </button>
         </div>
-        <div v-if="assistantMessage" class="assistant-message">
-          {{ assistantMessage }}
+        <div v-if="showAssistantResult && assistantResultTasks.length > 0" class="assistant-result">
+          <div class="result-title">查询结果</div>
+          <div
+            v-for="task in assistantResultTasks"
+            :key="task.id"
+            class="result-item"
+            @click="handleTaskClick(task.id)"
+          >
+            <span class="result-name">{{ task.name }}</span>
+            <span class="result-status" :style="{ color: getStatusColor(task.status) }">{{ task.status }}</span>
+          </div>
         </div>
         <div class="quick-questions">
           <div class="quick-title">快捷问题</div>
@@ -311,7 +321,7 @@ function getFocusTypeClass(type: string) {
       <div class="focus-card">
         <div class="card-header">
           <div class="card-title">今日重点关注</div>
-          <div class="card-count">最多 4 条</div>
+          <div class="card-count">{{ todayFocusList.length }} 条</div>
         </div>
         <div class="focus-list">
           <div
@@ -319,9 +329,12 @@ function getFocusTypeClass(type: string) {
             :key="item.id"
             class="focus-item"
             :class="getFocusTypeClass(item.type)"
-            @click="handleTaskClick(item.id.replace('f', 't'))"
+            @click="handleFocusClick(item.id)"
           >
-            <span class="focus-name">{{ item.name }}</span>
+            <div class="focus-main">
+              <span class="focus-name">{{ item.name }}</span>
+              <span v-if="item.status" class="focus-status">{{ item.status }}</span>
+            </div>
             <span class="focus-value">{{ item.value }}</span>
           </div>
         </div>
@@ -333,87 +346,55 @@ function getFocusTypeClass(type: string) {
 <style scoped>
 .workspace-home {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(450px, 28vw, 520px);
-  gap: 20px;
-  padding: 20px;
-  height: calc(100% - 120px);
+  grid-template-columns: minmax(0, 1fr) clamp(420px, 26vw, 480px);
+  gap: 16px;
+  padding: 14px 16px;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .main-content {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
 }
 
 .right-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  min-width: 360px;
-}
-
-.status-cards {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.status-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 12px 18px;
-  min-height: 92px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.status-card:hover {
-  border-color: var(--accent-color);
-  box-shadow: 0 0 16px rgba(105, 227, 111, 0.1);
-}
-
-.card-label {
-  font-size: 13px;
-  color: #8fa9c8;
-  line-height: 20px;
-}
-
-.card-value {
-  font-size: 30px;
-  font-weight: 700;
-  color: var(--accent-color);
-  line-height: 34px;
-  margin-top: 5px;
-}
-
-.card-unit {
-  font-size: 12px;
-  color: #8fa9c8;
-  margin-left: 4px;
-}
-
-.card-subtext {
-  font-size: 11px;
-  color: #5a7a9a;
-  line-height: 18px;
-  margin-top: 2px;
+  gap: 12px;
+  min-width: 0;
 }
 
 .smart-upload-section {
   background: rgba(5, 26, 50, 0.8);
   border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 10px;
-  padding: 16px 20px;
+  border-radius: 8px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 72px;
+  box-sizing: border-box;
 }
 
-.section-header {
-  margin-bottom: 12px;
+.smart-upload-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title-icon {
+  color: #69e36f;
+  margin-right: 6px;
+  flex-shrink: 0;
 }
 
 .section-title {
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
   font-weight: 600;
   color: #e8f3ff;
 }
@@ -421,32 +402,32 @@ function getFocusTypeClass(type: string) {
 .section-subtitle {
   font-size: 11px;
   color: #8fa9c8;
-  margin-top: 3px;
+  line-height: 1.4;
 }
 
 .upload-buttons {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  display: flex;
+  gap: 10px;
 }
 
 .upload-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 8px;
+  gap: 6px;
+  padding: 8px 14px;
+  background: rgba(105, 227, 111, 0.06);
+  border: 1px solid rgba(105, 227, 111, 0.18);
+  border-radius: 6px;
   color: #8fa9c8;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .upload-btn:hover {
-  background: rgba(105, 227, 111, 0.15);
+  background: rgba(105, 227, 111, 0.12);
   color: #69e36f;
 }
 
@@ -464,71 +445,62 @@ function getFocusTypeClass(type: string) {
 .tasks-section {
   flex: 1;
   background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 10px;
-  padding: 16px 20px;
+  border: 1px solid rgba(105, 227, 111, 0.08);
+  border-radius: 8px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.tasks-table-wrapper {
-  flex: 1;
-  overflow-x: auto;
-  min-height: 0;
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
 }
 
-.tasks-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.tasks-table th {
-  text-align: left;
-  padding: 10px 12px;
+.section-more {
   font-size: 12px;
-  color: #8fa9c8;
-  font-weight: 500;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.15);
-  height: 44px;
-}
-
-.task-row {
+  color: #2f9cff;
   cursor: pointer;
-  transition: background 0.2s;
-  height: 58px;
-  min-height: 58px;
+  transition: color 0.2s;
 }
 
-.task-row:hover {
-  background: rgba(105, 227, 111, 0.05);
-}
-
-.task-row td {
-  padding: 10px 12px;
-  font-size: 13px;
-  color: #e8f3ff;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
+.section-more:hover {
+  color: #69e36f;
 }
 
 .task-name {
   font-weight: 500;
 }
 
+.task-source {
+  color: #8fa9c8;
+  font-size: 12px;
+}
+
 .module-tag, .status-tag {
   display: inline-block;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
 }
 
+.progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .progress-bar {
-  width: 80px;
-  height: 6px;
-  background: rgba(105, 227, 111, 0.1);
+  flex: 1;
+  height: 5px;
+  background: rgba(105, 227, 111, 0.08);
   border-radius: 3px;
   overflow: hidden;
+  min-width: 50px;
 }
 
 .progress-fill {
@@ -538,15 +510,15 @@ function getFocusTypeClass(type: string) {
 }
 
 .progress-text {
-  margin-left: 10px;
-  font-size: 12px;
+  font-size: 11px;
   color: #8fa9c8;
+  flex-shrink: 0;
 }
 
 .next-step-btn {
-  padding: 6px 14px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
+  padding: 5px 12px;
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.25);
   border-radius: 4px;
   color: #69e36f;
   font-size: 12px;
@@ -555,86 +527,38 @@ function getFocusTypeClass(type: string) {
 }
 
 .next-step-btn:hover {
-  background: rgba(105, 227, 111, 0.2);
+  background: rgba(105, 227, 111, 0.18);
 }
 
 .overdue {
   color: #ff4f5e;
 }
 
-.pagination {
-  height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  border-top: 1px solid rgba(74, 144, 196, 0.2);
-  margin-top: 8px;
-  flex-shrink: 0;
-}
-
-.pagination-info {
-  font-size: 12px;
-  color: #5a7a9a;
-}
-
-.pagination-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.page-btn {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
-  background: rgba(105, 227, 111, 0.05);
-  border: 1px solid rgba(105, 227, 111, 0.15);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.page-btn:hover:not(:disabled) {
-  background: rgba(105, 227, 111, 0.15);
-  color: #e8f3ff;
-}
-
-.page-btn.active {
-  background: rgba(47, 156, 255, 0.2);
-  border-color: rgba(47, 156, 255, 0.5);
-  color: #2f9cff;
-  font-weight: 600;
-}
-
-.page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .assistant-card, .focus-card {
   background: rgba(5, 26, 50, 0.8);
   border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: 8px;
+  padding: 14px;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .card-title {
+  display: flex;
+  align-items: center;
   font-size: 14px;
   font-weight: 600;
   color: #e8f3ff;
+}
+
+.card-title .title-icon {
+  color: #69e36f;
+  margin-right: 6px;
 }
 
 .card-count {
@@ -642,22 +566,17 @@ function getFocusTypeClass(type: string) {
   color: #5a7a9a;
 }
 
-.greeting {
-  font-size: 13px;
-  color: #8fa9c8;
-  margin-bottom: 12px;
-}
-
 .input-wrapper {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .assistant-input {
   flex: 1;
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(105, 227, 111, 0.15);
   border-radius: 6px;
   color: #e8f3ff;
   font-size: 12px;
@@ -669,95 +588,155 @@ function getFocusTypeClass(type: string) {
 }
 
 .send-btn {
-  padding: 10px;
-  background: rgba(105, 227, 111, 0.15);
-  border: 1px solid rgba(105, 227, 111, 0.3);
+  padding: 8px 10px;
+  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
+  border: none;
   border-radius: 6px;
-  color: #69e36f;
+  color: #031020;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .send-btn:hover {
-  background: rgba(105, 227, 111, 0.25);
+  opacity: 0.9;
 }
 
-.assistant-message {
-  margin-top: 10px;
-  padding: 9px 10px;
-  background: rgba(47, 156, 255, 0.08);
-  border: 1px solid rgba(47, 156, 255, 0.18);
+.assistant-result {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(47, 156, 255, 0.06);
+  border: 1px solid rgba(47, 156, 255, 0.15);
   border-radius: 6px;
-  color: #9fc7ff;
+}
+
+.result-title {
+  font-size: 11px;
+  color: #8fa9c8;
+  margin-bottom: 6px;
+}
+
+.result-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.result-item:hover {
+  background: rgba(47, 156, 255, 0.08);
+}
+
+.result-name {
   font-size: 12px;
-  line-height: 1.5;
+  color: #e8f3ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-status {
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .quick-questions {
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .quick-title {
   font-size: 11px;
   color: #5a7a9a;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .quick-question-btn {
   display: block;
   width: 100%;
-  padding: 9px 12px;
-  background: rgba(105, 227, 111, 0.05);
+  padding: 7px 10px;
+  background: rgba(105, 227, 111, 0.04);
   border: none;
   border-radius: 5px;
   color: #8fa9c8;
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
   transition: all 0.2s;
   line-height: 1.4;
   white-space: normal;
-  min-height: 38px;
+  min-height: 32px;
 }
 
 .quick-question-btn:hover {
-  background: rgba(105, 227, 111, 0.1);
+  background: rgba(105, 227, 111, 0.08);
   color: #e8f3ff;
 }
 
 .focus-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .focus-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.2s;
+  border-left: 2px solid transparent;
 }
 
 .focus-item:hover {
-  background: rgba(105, 227, 111, 0.08);
+  background: rgba(105, 227, 111, 0.06);
+}
+
+.focus-item.overdue {
+  border-left-color: #ff4f5e;
+}
+
+.focus-item.urgent {
+  border-left-color: #ffb347;
+}
+
+.focus-item.today {
+  border-left-color: #2f9cff;
+}
+
+.focus-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
 }
 
 .focus-name {
   font-size: 12px;
   color: #e8f3ff;
   line-height: 1.4;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-status {
+  font-size: 11px;
+  color: #8fa9c8;
+  flex-shrink: 0;
 }
 
 .focus-value {
   font-size: 11px;
   font-weight: 500;
-  flex-shrink: 0;
 }
 
 .focus-item.overdue .focus-value {

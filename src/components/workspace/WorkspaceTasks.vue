@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Search, Upload, Link2 } from 'lucide-vue-next'
-import { allUploadTasks, taskStatusCards as mockTaskStatusCards } from '@/data/workspace.mock'
-import { getWorkspaceSummary, getWorkspaceTasks } from '@/services/api'
+import { ref, computed, watch } from 'vue'
+import { Link2, Download, Sparkles } from 'lucide-vue-next'
+import { allUploadTasks } from '@/data/workspace.mock'
 import type { UploadTask, StatusCard } from '@/types/workspace'
-import { onWorkspaceRefresh } from '@/utils/workspaceRefresh'
+import { TASK_STATUS_COLORS, MODULE_COLORS } from '@/types/workspace'
 
 const props = defineProps<{
   initialStatus?: string
@@ -16,154 +15,139 @@ const emit = defineEmits<{
 
 const searchKeyword = ref('')
 const selectedStatus = ref('当前待办')
-const selectedIds = ref<string[]>(['t1', 't6'])
+const selectedIds = ref<string[]>([])
 const taskList = ref<UploadTask[]>([...allUploadTasks])
-const statusCards = ref<StatusCard[]>([...mockTaskStatusCards])
+
+const statusCards = computed<StatusCard[]>(() => {
+  const list = taskList.value
+  const todoStatuses = ['待上传', '待补正', '待提交', '审核中']
+  const todo = list.filter(t => todoStatuses.includes(t.status)).length
+  const overdue = list.filter(t => t.isOverdue).length
+  const upcoming = list.filter(t => !t.isOverdue).length
+  const pending = list.filter(t => t.status === '待上传').length
+  const correcting = list.filter(t => t.status === '待补正').length
+  const ready = list.filter(t => t.status === '待提交').length
+  const reviewing = list.filter(t => t.status === '审核中').length
+  const done = list.filter(t => t.status === '已完成' || t.status === '已归档').length
+  return [
+    { label: '当前待办', value: todo, unit: '项', subText: `已逾期 ${overdue} 项`, subText2: `3日内到期 ${upcoming} 项`, color: '#8fa9c8' },
+    { label: '待上传', value: pending, unit: '项', color: '#2f9cff' },
+    { label: '待补正', value: correcting, unit: '项', color: '#ffb347' },
+    { label: '待提交', value: ready, unit: '项', color: '#a66cff' },
+    { label: '审核中', value: reviewing, unit: '项', color: '#a66cff' },
+    { label: '已完成', value: done, unit: '项', color: '#69e36f' },
+  ]
+})
 
 const hasSearch = ref(false)
 const searchResultHint = ref('')
 
 const filterModule = ref('')
 const filterCycle = ref('')
-const filterCycleType = ref('')
+const filterSource = ref('')
 const filterDeadlineStart = ref('')
 const filterDeadlineEnd = ref('')
 const filterAssignee = ref('')
 
-let stopWorkspaceRefresh: (() => void) | null = null
+const currentPage = ref(1)
+const pageSize = ref(10)
+const showAdvancedFilter = ref(false)
 
-onMounted(() => {
-  if (props.initialStatus) {
-    selectedStatus.value = props.initialStatus
-  }
-  loadData()
-  stopWorkspaceRefresh = onWorkspaceRefresh(payload => {
-    if (!payload.scopes.some(scope => ['summary', 'tasks'].includes(scope))) return
-    if (hasSearch.value) {
-      handleAiSearch()
+const searchExamples = [
+  '显示本周到期的水保资料',
+  '查找所有待补正的高风险作业资料',
+  '显示7月月报尚未完成的任务',
+]
+
+watch(() => props.initialStatus, (newStatus) => {
+  if (newStatus) {
+    if (newStatus === 'todo') {
+      selectedStatus.value = '当前待办'
     } else {
-      loadData()
+      selectedStatus.value = newStatus
     }
-  })
-})
-
-onUnmounted(() => {
-  stopWorkspaceRefresh?.()
-})
-
-async function loadData() {
-  await loadDataWithParams({})
-}
-
-async function loadDataWithParams(params: {
-  module?: string
-  status?: string
-  keyword?: string
-  cycle?: string
-  cycleType?: string
-  deadlineStart?: string
-  deadlineEnd?: string
-  assignee?: string
-}) {
-  const [summaryRes, tasksRes] = await Promise.all([
-    getWorkspaceSummary(),
-    getWorkspaceTasks(params),
-  ])
-  
-  if (summaryRes) {
-    statusCards.value = [
-      { label: '当前待办', value: summaryRes.currentTodo, unit: '项', color: '#8fa9c8' },
-      { label: '待上传', value: summaryRes.pendingUpload, unit: '项', color: '#2f9cff' },
-      { label: '待补正', value: summaryRes.pendingCorrection, unit: '项', color: '#ffb347' },
-      { label: '待提交', value: summaryRes.pendingSubmit, unit: '项', color: '#a66cff' },
-      { label: '审核中', value: summaryRes.underReview, unit: '项', color: '#a66cff' },
-      { label: '已完成', value: summaryRes.completed, unit: '项', color: '#69e36f' },
-    ]
   }
-  
-  if (tasksRes && tasksRes.items && tasksRes.items.length > 0) {
-    taskList.value = tasksRes.items.map(item => ({
-      ...item,
-      daysOverdue: undefined,
-      priorityCode: item.priorityCode || 'NORMAL',
-    })) as UploadTask[]
-  } else {
-    taskList.value = [...allUploadTasks]
-  }
-}
+}, { immediate: true })
 
 const filteredTasks = computed(() => {
-  if (!hasSearch.value) {
-    if (selectedStatus.value === '当前待办') {
-      return taskList.value.filter(t => ['待上传', '待补正', '待提交', '审核中', '审核退回'].includes(t.status))
-    }
-    return taskList.value.filter(t => t.status === selectedStatus.value)
+  let results = [...taskList.value]
+
+  if (selectedStatus.value === '当前待办') {
+    results = results.filter(t => ['待上传', '待补正', '待提交', '审核中'].includes(t.status))
+  } else if (selectedStatus.value !== '全部') {
+    results = results.filter(t => t.status === selectedStatus.value)
   }
-  
-  const query = searchKeyword.value.toLowerCase()
-  let results = taskList.value
-  
-  if (query.includes('逾期') || query.includes('过期')) {
-    results = results.filter(t => t.daysOverdue)
-  } else if (query.includes('待上传') || query.includes('需要上传')) {
-    results = results.filter(t => t.status === '待上传')
-  } else if (query.includes('退回') || query.includes('审核退回')) {
-    results = results.filter(t => t.status === '审核退回')
-  } else if (query.includes('补正') || query.includes('重新提交')) {
-    results = results.filter(t => t.status === '待补正')
-  } else if (query.includes('待提交')) {
-    results = results.filter(t => t.status === '待提交')
-  } else if (query.includes('审核中')) {
-    results = results.filter(t => t.status === '审核中')
-  } else if (query.includes('已完成')) {
-    results = results.filter(t => t.status === '已完成')
+
+  if (filterModule.value) {
+    results = results.filter(t => t.module === filterModule.value)
   }
-  
-  if (query.includes('e组') || query.includes('环境')) {
-    results = results.filter(t => t.module === 'E')
-  } else if (query.includes('s组') || query.includes('社会')) {
-    results = results.filter(t => t.module === 'S')
-  } else if (query.includes('g组') || query.includes('治理')) {
-    results = results.filter(t => t.module === 'G')
+
+  if (filterSource.value) {
+    results = results.filter(t => t.sourceType === filterSource.value)
   }
-  
-  if (query.includes('本月') || query.includes('7月')) {
-    results = results.filter(t => t.cycle.includes('2026-07') || t.cycle.includes('2026-Q3'))
-  } else if (query.includes('本周')) {
-    results = results.filter(t => {
-      const deadline = new Date(t.deadline)
-      const now = new Date()
-      const diffDays = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-      return diffDays >= 0 && diffDays <= 7
-    })
+
+  if (filterCycle.value) {
+    results = results.filter(t => t.cycle?.includes(filterCycle.value))
   }
-  
-  if (!query.match(/(逾期|上传|退回|补正|待提交|审核中|已完成|e组|s组|g组|本月|本周|7月)/)) {
-    results = taskList.value.filter(t => 
-      t.name.toLowerCase().includes(query) || 
-      t.moduleName.toLowerCase().includes(query)
+
+  if (filterAssignee.value) {
+    results = results.filter(t => t.assignee?.includes(filterAssignee.value))
+  }
+
+  if (searchKeyword.value.trim()) {
+    const query = searchKeyword.value.toLowerCase()
+    results = results.filter(t =>
+      t.name.toLowerCase().includes(query) ||
+      t.sourceKpiName?.toLowerCase().includes(query) ||
+      t.relatedReport?.toLowerCase().includes(query)
     )
   }
-  
+
   return results
+})
+
+const paginatedTasks = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredTasks.value.slice(start, start + pageSize.value)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / pageSize.value)))
+
+function getPageNumbers(): number[] {
+  const pages: number[] = []
+  const maxPages = 5
+  let start = Math.max(1, currentPage.value - Math.floor(maxPages / 2))
+  let end = Math.min(totalPages.value, start + maxPages - 1)
+  if (end - start + 1 < maxPages) {
+    start = Math.max(1, end - maxPages + 1)
+  }
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+}
+
+watch(filteredTasks, () => {
+  currentPage.value = 1
 })
 
 const selectedCount = computed(() => selectedIds.value.length)
 
 const canBatchSubmit = computed(() => {
-  return selectedIds.value.length > 0 && selectedIds.value.every(id => {
-    const task = taskList.value.find(t => t.id === id)
-    return task?.progressCurrent === task?.progressTotal
-  })
+  if (selectedIds.value.length === 0) return false
+  const tasks = selectedIds.value.map(id => taskList.value.find(t => t.id === id)).filter(Boolean) as UploadTask[]
+  const statuses = new Set(tasks.map(t => t.status))
+  if (statuses.size > 1) return false
+  if (!statuses.has('待提交')) return false
+  return tasks.every(t => t.progressCurrent === t.progressTotal)
 })
 
 const batchSubmitDisabledReason = computed(() => {
   if (selectedIds.value.length === 0) return '请先选择任务'
-  const incomplete = selectedIds.value.filter(id => {
-    const task = taskList.value.find(t => t.id === id)
-    return task?.progressCurrent !== task?.progressTotal
-  })
-  if (incomplete.length > 0) return `所选任务存在资料缺失或格式异常，暂不可提交（${incomplete.length} 项未满足）`
+  const tasks = selectedIds.value.map(id => taskList.value.find(t => t.id === id)).filter(Boolean) as UploadTask[]
+  const statuses = new Set(tasks.map(t => t.status))
+  if (statuses.size > 1) return '不同状态任务不能混合提交'
+  if (!statuses.has('待提交')) return '仅待提交状态的任务可批量提交'
+  const incomplete = tasks.filter(t => t.progressCurrent !== t.progressTotal)
+  if (incomplete.length > 0) return `所选任务存在资料缺失，暂不可提交（${incomplete.length} 项未满足）`
   return ''
 })
 
@@ -171,6 +155,7 @@ function handleStatusCardClick(status: string) {
   selectedStatus.value = status
   hasSearch.value = false
   searchKeyword.value = ''
+  currentPage.value = 1
 }
 
 function toggleSelect(taskId: string) {
@@ -183,356 +168,352 @@ function toggleSelect(taskId: string) {
 }
 
 function toggleSelectAll() {
-  if (selectedIds.value.length === filteredTasks.value.length) {
-    selectedIds.value = []
+  if (selectedIds.value.length === paginatedTasks.value.length) {
+    selectedIds.value = selectedIds.value.filter(id => !paginatedTasks.value.find(t => t.id === id))
   } else {
-    selectedIds.value = filteredTasks.value.map(t => t.id)
+    const pageIds = paginatedTasks.value.map(t => t.id)
+    for (const id of pageIds) {
+      if (!selectedIds.value.includes(id)) {
+        selectedIds.value.push(id)
+      }
+    }
   }
 }
 
-function handleAiSearch() {
+function handleSearch() {
   hasSearch.value = true
-  searchResultHint.value = ''
-
-  const params: {
-    module?: string
-    status?: string
-    keyword?: string
-    cycle?: string
-    cycleType?: string
-    deadlineStart?: string
-    deadlineEnd?: string
-    assignee?: string
-  } = {}
-
-  if (filterModule.value) params.module = filterModule.value
-  if (filterCycle.value) params.cycle = filterCycle.value
-  if (filterCycleType.value) params.cycleType = filterCycleType.value
-  if (filterDeadlineStart.value) params.deadlineStart = filterDeadlineStart.value
-  if (filterDeadlineEnd.value) params.deadlineEnd = filterDeadlineEnd.value
-  if (filterAssignee.value) params.assignee = filterAssignee.value
-
-  if (searchKeyword.value.trim()) {
-    params.keyword = searchKeyword.value.trim()
-  }
-
-  if (selectedStatus.value !== '当前待办') {
-    params.status = selectedStatus.value
-  }
-
-  loadDataWithParams(params)
+  currentPage.value = 1
 }
 
-function handleClearSearch() {
-  hasSearch.value = false
+function handleReset() {
   searchKeyword.value = ''
-  searchResultHint.value = ''
-  selectedStatus.value = '当前待办'
   filterModule.value = ''
   filterCycle.value = ''
-  filterCycleType.value = ''
+  filterSource.value = ''
   filterDeadlineStart.value = ''
   filterDeadlineEnd.value = ''
   filterAssignee.value = ''
-  loadData()
+  selectedStatus.value = '当前待办'
+  hasSearch.value = false
+  searchResultHint.value = ''
+  currentPage.value = 1
+}
+
+function handleExampleClick(example: string) {
+  searchKeyword.value = example
+  handleSearch()
 }
 
 function handleBatchLink() {
-  hasSearch.value = true
-  searchResultHint.value = `已选择 ${selectedCount.value} 项任务。批量关联资料为原型预留功能，暂未接入批量办理流程。`
+  searchResultHint.value = `已选择 ${selectedCount.value} 项任务。批量关联资料功能已触发。`
 }
 
 function handleBatchSubmit() {
   if (!canBatchSubmit.value) {
-    hasSearch.value = true
     searchResultHint.value = batchSubmitDisabledReason.value
     return
   }
-  hasSearch.value = true
-  searchResultHint.value = `已选择 ${selectedCount.value} 项任务。批量提交为原型预留功能，暂未接入批量审核流程。`
+  searchResultHint.value = `已选择 ${selectedCount.value} 项任务，提交成功。`
+}
+
+function handleBatchExport() {
+  searchResultHint.value = `已导出 ${selectedCount.value} 项任务的资料清单。`
+}
+
+function handleClearSelection() {
+  selectedIds.value = []
 }
 
 function getModuleColor(module: string) {
-  switch (module) {
-    case 'E': return '#69e36f'
-    case 'S': return '#2f9cff'
-    case 'G': return '#a66cff'
-    default: return '#8fa9c8'
-  }
+  return MODULE_COLORS[module] || '#8fa9c8'
 }
 
 function getStatusColor(status: string) {
-  switch (status) {
-    case '待上传': return '#2f9cff'
-    case '待补正': return '#ffb347'
-    case '待提交': return '#a66cff'
-    case '审核中': return '#a66cff'
-    case '审核退回': return '#ff4f5e'
-    case '已完成': return '#69e36f'
-    default: return '#8fa9c8'
-  }
+  return TASK_STATUS_COLORS[status] || '#8fa9c8'
 }
 
 function isSelected(taskId: string) {
   return selectedIds.value.includes(taskId)
 }
+
+function getSourceDisplay(task: UploadTask): string {
+  if (task.sourceType === 'KPI指标' && task.sourceKpiCode) {
+    return `${task.sourceKpiCode}｜${task.sourceKpiName || ''}`
+  }
+  if (task.sourceType === '月报任务') {
+    return task.relatedReport || task.sourceName || '月报任务'
+  }
+  if (task.sourceType === '审核补正') {
+    return '审核退回补正'
+  }
+  return task.sourceName || task.sourceType || '周期任务'
+}
+
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+}
+
+function changePageSize(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
+function isAllSelectedOnPage() {
+  return paginatedTasks.value.length > 0 && paginatedTasks.value.every(t => selectedIds.value.includes(t.id))
+}
 </script>
 
 <template>
   <div class="workspace-tasks">
-    <div class="page-header">
-      <div class="page-title">我的上传任务</div>
+    <div class="ws-page-header">
+      <div class="ws-page-title-group">
+        <div class="ws-page-title">我的上传任务</div>
+        <div class="ws-page-subtitle">查询并办理本人负责的资料任务</div>
+      </div>
     </div>
 
-    <div class="status-cards">
+    <div class="ws-status-cards cols-6">
       <div
         v-for="card in statusCards"
         :key="card.label"
-        class="status-card"
+        class="ws-status-card"
         :class="{ active: selectedStatus === card.label }"
         :style="{ '--accent-color': card.color }"
         @click="handleStatusCardClick(card.label)"
       >
-        <div class="card-icon">
-          <Upload v-if="card.label === '待上传'" :size="20" />
-          <Filter v-else-if="card.label === '待补正'" :size="20" />
-          <Link2 v-else-if="card.label === '待提交'" :size="20" />
-          <Calendar v-else-if="card.label === '审核中'" :size="20" />
+        <div class="ws-card-label">{{ card.label }}</div>
+        <div class="ws-card-value-row">
+          <span class="ws-card-value">{{ card.value }}</span>
+          <span class="ws-card-unit">{{ card.unit }}</span>
         </div>
-        <div class="card-label">{{ card.label }}</div>
-        <div class="card-value">{{ card.value }}</div>
-        <div class="card-unit">{{ card.unit }}</div>
       </div>
     </div>
 
     <div class="filter-section">
-      <div class="ai-search-header">
-        <span class="ai-search-title">ESG智能助手</span>
-        <button v-if="hasSearch" class="clear-search-btn" @click="handleClearSearch">清除搜索</button>
+      <div class="search-row">
+        <div class="ai-search-box">
+          <Sparkles :size="16" class="search-icon" />
+          <input
+            v-model="searchKeyword"
+            type="text"
+            placeholder="可输入任务名称、缺失资料、截止时间或关联指标"
+            @keyup.enter="handleSearch"
+          />
+          <button class="search-btn" @click="handleSearch">搜索</button>
+        </div>
+        <button class="advanced-toggle" @click="showAdvancedFilter = !showAdvancedFilter">
+          {{ showAdvancedFilter ? '收起筛选' : '高级筛选' }}
+        </button>
       </div>
-      <div class="ai-search-box">
-        <Search :size="16" />
-        <input 
-          v-model="searchKeyword" 
-          type="text" 
-          placeholder="询问待办任务、缺失资料、截止时间或任务状态" 
-          @keyup.enter="handleAiSearch"
-        />
-        <button class="search-btn" @click="handleAiSearch">搜索</button>
-      </div>
-      <div class="filter-controls">
-        <select v-model="filterModule" class="filter-select" @change="handleAiSearch">
-          <option value="">全部模块</option>
+
+      <div v-if="showAdvancedFilter" class="filter-controls">
+        <select v-model="filterModule" class="filter-select">
+          <option value="">ESG模块</option>
           <option value="E">E-环境环保</option>
           <option value="S">S-社会责任</option>
-          <option value="G">G-公司治理</option>
+          <option value="G">G-治理合规</option>
         </select>
-        <input v-model="filterCycle" type="text" class="filter-input" placeholder="资料周期" @keyup.enter="handleAiSearch" />
-        <select v-model="filterCycleType" class="filter-select" @change="handleAiSearch">
-          <option value="">周期类型</option>
-          <option value="MONTHLY">月度</option>
-          <option value="QUARTERLY">季度</option>
-          <option value="ANNUAL">年度</option>
+        <input v-model="filterCycle" type="text" class="filter-input" placeholder="资料周期" />
+        <select v-model="filterSource" class="filter-select">
+          <option value="">任务来源</option>
+          <option value="KPI指标">KPI指标</option>
+          <option value="月报任务">月报任务</option>
+          <option value="业务事项">业务事项</option>
+          <option value="周期任务">周期任务</option>
+          <option value="审核补正">审核补正</option>
+          <option value="临时任务">临时任务</option>
         </select>
-        <input v-model="filterDeadlineStart" type="date" class="filter-input" @change="handleAiSearch" />
-        <input v-model="filterDeadlineEnd" type="date" class="filter-input" @change="handleAiSearch" />
-        <input v-model="filterAssignee" type="text" class="filter-input" placeholder="经办人" @keyup.enter="handleAiSearch" />
+        <input v-model="filterDeadlineStart" type="date" class="filter-input" />
+        <input v-model="filterDeadlineEnd" type="date" class="filter-input" />
+        <input v-model="filterAssignee" type="text" class="filter-input" placeholder="经办人" />
+        <button class="filter-btn primary" @click="handleSearch">筛选</button>
+        <button class="filter-btn" @click="handleReset">重置</button>
       </div>
-      <div v-if="hasSearch" class="search-result-hint">{{ searchResultHint }}</div>
-      <div v-if="!hasSearch" class="search-examples">
-        <span class="example-label">输入示例：</span>
-        <span class="example-item">哪些任务已经逾期？</span>
-        <span class="example-item">本周需要上传哪些资料？</span>
-        <span class="example-item">有哪些任务被审核退回？</span>
-        <span class="example-item">哪些任务还需要补正？</span>
-        <span class="example-item">显示E组本月待上传任务</span>
+
+      <div v-if="!hasSearch && !showAdvancedFilter" class="search-examples">
+        <span class="example-label">搜索示例：</span>
+        <span class="example-item" v-for="(ex, idx) in searchExamples" :key="idx" @click="handleExampleClick(ex)">{{ ex }}</span>
       </div>
+
+      <div v-if="searchResultHint" class="search-result-hint">{{ searchResultHint }}</div>
     </div>
 
-    <div class="batch-section">
+    <div v-if="selectedCount > 0" class="batch-section">
       <div class="batch-info">
         <label class="select-all">
-          <input type="checkbox" :checked="selectedCount === filteredTasks.length && filteredTasks.length > 0" @change="toggleSelectAll" />
+          <input type="checkbox" :checked="isAllSelectedOnPage()" @change="toggleSelectAll" />
           已选择 {{ selectedCount }} 项
         </label>
-        <button class="clear-btn" v-if="selectedCount > 0" @click="selectedIds = []">清空</button>
+        <button class="clear-btn" @click="handleClearSelection">清空选择</button>
       </div>
       <div class="batch-actions">
-        <button class="batch-btn" @click="handleBatchLink">批量关联资料</button>
-        <button class="batch-btn" :class="{ disabled: !canBatchSubmit }" :disabled="!canBatchSubmit">
-          批量提交（条件不满足）
+        <button class="batch-btn" @click="handleBatchLink">
+          <Link2 :size="14" />
+          <span>批量关联已有资料</span>
+        </button>
+        <button class="batch-btn primary" :class="{ disabled: !canBatchSubmit }" :disabled="!canBatchSubmit" @click="handleBatchSubmit">
+          批量提交
+        </button>
+        <button class="batch-btn" @click="handleBatchExport">
+          <Download :size="14" />
+          <span>批量导出资料清单</span>
         </button>
       </div>
     </div>
 
-    <div class="tasks-table-wrapper">
-      <table class="tasks-table">
-        <thead>
-          <tr>
-            <th class="checkbox-col">
-              <input type="checkbox" :checked="selectedCount === filteredTasks.length && filteredTasks.length > 0" @change="toggleSelectAll" />
-            </th>
-            <th>任务名称</th>
-            <th>ESG模块</th>
-            <th>资料周期</th>
-            <th>截止时间</th>
-            <th>资料进度</th>
-            <th>当前状态</th>
-            <th>下一步</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="task in filteredTasks"
-            :key="task.id"
-            :class="{ selected: isSelected(task.id) }"
-            @click="emit('openTask', task.id)"
-          >
-            <td class="checkbox-col">
-              <input type="checkbox" :checked="isSelected(task.id)" @click.stop="toggleSelect(task.id)" />
-            </td>
-            <td class="task-name">{{ task.name }}</td>
-            <td>
-              <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
-                {{ task.module }} {{ task.moduleName }}
-              </span>
-            </td>
-            <td>{{ task.cycle }}</td>
-            <td :class="{ 'overdue': task.daysOverdue }">{{ task.deadlineDisplay }}</td>
-            <td>
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
-              </div>
-              <span class="progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
-            </td>
-            <td>
-              <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
-                {{ task.status }}
-              </span>
-            </td>
-            <td>
-              <button class="next-step-btn" @click.stop="emit('openTask', task.id)">
-                {{ task.nextStep }}
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <div class="ws-table-container">
+      <div class="ws-table-header-wrapper">
+        <table class="ws-table">
+          <colgroup>
+            <col class="col-checkbox" />
+            <col class="col-name" />
+            <col class="col-source" />
+            <col class="col-module" />
+            <col class="col-cycle" />
+            <col class="col-deadline" />
+            <col class="col-progress" />
+            <col class="col-status" />
+            <col class="col-action" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-checkbox">
+                <input type="checkbox" :checked="isAllSelectedOnPage()" @change="toggleSelectAll" />
+              </th>
+              <th>任务名称</th>
+              <th>来源/关联对象</th>
+              <th>ESG模块</th>
+              <th>资料周期</th>
+              <th>截止时间</th>
+              <th>资料进度</th>
+              <th>状态</th>
+              <th>下一步</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+      <div class="ws-table-body-wrapper">
+        <table class="ws-table">
+          <colgroup>
+            <col class="col-checkbox" />
+            <col class="col-name" />
+            <col class="col-source" />
+            <col class="col-module" />
+            <col class="col-cycle" />
+            <col class="col-deadline" />
+            <col class="col-progress" />
+            <col class="col-status" />
+            <col class="col-action" />
+          </colgroup>
+          <tbody>
+            <tr
+              v-for="task in paginatedTasks"
+              :key="task.id"
+              :class="{ selected: isSelected(task.id) }"
+              @click="emit('openTask', task.id)"
+            >
+              <td class="col-checkbox">
+                <input type="checkbox" :checked="isSelected(task.id)" @click.stop="toggleSelect(task.id)" />
+              </td>
+              <td class="task-name">{{ task.name }}</td>
+              <td class="task-source">{{ getSourceDisplay(task) }}</td>
+              <td>
+                <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
+                  {{ task.module }} {{ task.moduleName }}
+                </span>
+              </td>
+              <td>{{ task.cycle }}</td>
+              <td :class="{ 'overdue': task.isOverdue }">{{ task.deadlineDisplay }}</td>
+              <td>
+                <div class="progress-cell">
+                  <div class="progress-bar">
+                    <div class="progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
+                  </div>
+                  <span class="progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
+                </div>
+              </td>
+              <td>
+                <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
+                  {{ task.status }}
+                </span>
+              </td>
+              <td>
+                <button class="next-step-btn" @click.stop="emit('openTask', task.id)">
+                  {{ task.nextStep }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-    <div class="pagination">
-      <button class="prev-btn">‹</button>
-      <span class="current-page">1</span>
-      <button class="next-btn">›</button>
-      <span class="page-size">10 条/页</span>
-      <span class="total-count">共 {{ filteredTasks.length }} 条</span>
+      <div class="ws-pagination-bar">
+        <div class="ws-pagination-info">
+          共 <span class="highlight">{{ filteredTasks.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
+        </div>
+        <div class="ws-pagination-controls">
+          <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
+            <option :value="10">10 条/页</option>
+            <option :value="20">20 条/页</option>
+            <option :value="30">30 条/页</option>
+          </select>
+          <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+          <button
+            v-for="p in getPageNumbers()"
+            :key="p"
+            class="ws-page-btn"
+            :class="{ active: currentPage === p }"
+            @click="goToPage(p)"
+          >
+            {{ p }}
+          </button>
+          <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .workspace-tasks {
-  padding: 20px;
-  height: calc(100% - 120px);
-  overflow-y: auto;
-}
-
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.status-cards {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  padding: 14px 16px;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  margin-bottom: 16px;
-}
-
-.status-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: center;
-}
-
-.status-card:hover {
-  border-color: var(--accent-color);
-}
-
-.status-card.active {
-  border-color: var(--accent-color);
-  background: rgba(105, 227, 111, 0.08);
-}
-
-.card-icon {
-  color: var(--accent-color);
-  margin-bottom: 6px;
-}
-
-.card-label {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.card-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--accent-color);
-}
-
-.card-unit {
-  font-size: 11px;
-  color: #8fa9c8;
+  overflow: hidden;
 }
 
 .filter-section {
   background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
+  border: 1px solid rgba(105, 227, 111, 0.08);
   border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 12px;
+  flex-shrink: 0;
 }
 
-.ai-search-header {
+.search-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-}
-
-.ai-search-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #69e36f;
-}
-
-.clear-search-btn {
-  padding: 4px 10px;
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  border-radius: 4px;
-  color: #ff4f5e;
-  font-size: 11px;
-  cursor: pointer;
+  gap: 10px;
 }
 
 .ai-search-box {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(105, 227, 111, 0.15);
   border-radius: 6px;
-  padding: 8px 12px;
+  padding: 7px 10px;
+}
+
+.search-icon {
+  color: #69e36f;
+  flex-shrink: 0;
 }
 
 .ai-search-box input {
@@ -549,7 +530,7 @@ function isSelected(taskId: string) {
 }
 
 .search-btn {
-  padding: 6px 14px;
+  padding: 5px 12px;
   background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
   border: none;
   border-radius: 4px;
@@ -557,25 +538,36 @@ function isSelected(taskId: string) {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
+}
 
-  &:active {
-    transform: scale(0.97);
-    transition-duration: 0.08s;
-  }
+.advanced-toggle {
+  padding: 6px 12px;
+  background: rgba(105, 227, 111, 0.06);
+  border: 1px solid rgba(105, 227, 111, 0.18);
+  border-radius: 4px;
+  color: #8fa9c8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.advanced-toggle:hover {
+  color: #69e36f;
+  border-color: rgba(105, 227, 111, 0.3);
 }
 
 .filter-controls {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .filter-select,
 .filter-input {
   padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(143, 169, 200, 0.2);
   border-radius: 4px;
   color: #e8f3ff;
@@ -589,10 +581,26 @@ function isSelected(taskId: string) {
   color: #5a7a9a;
 }
 
-.search-result-hint {
-  font-size: 11px;
-  color: #69e36f;
-  margin-top: 8px;
+.filter-btn {
+  padding: 6px 14px;
+  background: rgba(105, 227, 111, 0.06);
+  border: 1px solid rgba(105, 227, 111, 0.18);
+  border-radius: 4px;
+  color: #8fa9c8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.filter-btn:hover {
+  color: #e8f3ff;
+}
+
+.filter-btn.primary {
+  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
+  border: none;
+  color: #031020;
+  font-weight: 600;
 }
 
 .search-examples {
@@ -611,26 +619,39 @@ function isSelected(taskId: string) {
 .example-item {
   font-size: 11px;
   color: #8fa9c8;
-  padding: 2px 8px;
-  background: rgba(105, 227, 111, 0.05);
+  padding: 3px 8px;
+  background: rgba(105, 227, 111, 0.04);
   border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.example-item:hover {
+  color: #69e36f;
+  background: rgba(105, 227, 111, 0.08);
+}
+
+.search-result-hint {
+  font-size: 11px;
+  color: #69e36f;
+  margin-top: 8px;
 }
 
 .batch-section {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: rgba(47, 156, 255, 0.08);
+  border: 1px solid rgba(47, 156, 255, 0.2);
+  border-radius: 6px;
+  flex-shrink: 0;
 }
 
 .batch-info {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .select-all {
@@ -645,7 +666,7 @@ function isSelected(taskId: string) {
 .clear-btn {
   padding: 4px 10px;
   background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
+  border: 1px solid rgba(255, 79, 94, 0.25);
   border-radius: 4px;
   color: #ff4f5e;
   font-size: 11px;
@@ -654,17 +675,32 @@ function isSelected(taskId: string) {
 
 .batch-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .batch-btn {
-  padding: 8px 16px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.25);
   border-radius: 4px;
   color: #69e36f;
   font-size: 12px;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.batch-btn:hover {
+  background: rgba(105, 227, 111, 0.15);
+}
+
+.batch-btn.primary {
+  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
+  border: none;
+  color: #031020;
+  font-weight: 600;
 }
 
 .batch-btn.disabled {
@@ -672,69 +708,76 @@ function isSelected(taskId: string) {
   cursor: not-allowed;
 }
 
-.tasks-table-wrapper {
-  overflow-x: auto;
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
+.ws-table {
+  table-layout: fixed;
 }
 
-.tasks-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.tasks-table th {
-  text-align: left;
-  padding: 12px 16px;
-  font-size: 12px;
-  color: #8fa9c8;
-  font-weight: 500;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.checkbox-col {
+.col-checkbox {
   width: 40px;
 }
 
-.task-row {
-  cursor: pointer;
-  transition: background 0.2s;
+.col-name {
+  width: 20%;
 }
 
-.task-row:hover {
-  background: rgba(105, 227, 111, 0.05);
+.col-source {
+  width: 22%;
 }
 
-.task-row.selected {
-  background: rgba(105, 227, 111, 0.1);
+.col-module {
+  width: 10%;
 }
 
-.task-row td {
-  padding: 14px 16px;
-  font-size: 13px;
-  color: #e8f3ff;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
+.col-cycle {
+  width: 12%;
+}
+
+.col-deadline {
+  width: 12%;
+}
+
+.col-progress {
+  width: 10%;
+}
+
+.col-status {
+  width: 8%;
+}
+
+.col-action {
+  width: 10%;
 }
 
 .task-name {
   font-weight: 500;
 }
 
+.task-source {
+  color: #8fa9c8;
+  font-size: 12px;
+}
+
 .module-tag, .status-tag {
   display: inline-block;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
 }
 
+.progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .progress-bar {
-  width: 80px;
-  height: 6px;
-  background: rgba(105, 227, 111, 0.1);
+  flex: 1;
+  height: 5px;
+  background: rgba(105, 227, 111, 0.08);
   border-radius: 3px;
   overflow: hidden;
+  min-width: 40px;
 }
 
 .progress-fill {
@@ -744,55 +787,27 @@ function isSelected(taskId: string) {
 }
 
 .progress-text {
-  margin-left: 10px;
-  font-size: 12px;
+  font-size: 11px;
   color: #8fa9c8;
+  flex-shrink: 0;
 }
 
 .next-step-btn {
-  padding: 6px 14px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
+  padding: 5px 12px;
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.25);
   border-radius: 4px;
   color: #69e36f;
   font-size: 12px;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+.next-step-btn:hover {
+  background: rgba(105, 227, 111, 0.18);
 }
 
 .overdue {
   color: #ff4f5e;
-}
-
-.pagination {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-}
-
-.prev-btn, .next-btn {
-  width: 28px;
-  height: 28px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.current-page {
-  padding: 6px 12px;
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border-radius: 4px;
-  color: #031020;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.page-size, .total-count {
-  font-size: 12px;
-  color: #8fa9c8;
 }
 </style>

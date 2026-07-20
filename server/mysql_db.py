@@ -12,7 +12,7 @@ MYSQL_CONFIG = {
     "host": os.getenv("LUOYI_MYSQL_HOST", "127.0.0.1"),
     "port": int(os.getenv("LUOYI_MYSQL_PORT", "3307")),
     "user": os.getenv("LUOYI_MYSQL_USER", "luoyi_app"),
-    "password": os.getenv("LUOYI_MYSQL_PASSWORD", "Luoyi_App_2026!"),
+    "password": os.getenv("LUOYI_MYSQL_PASSWORD", ""),
     "database": os.getenv("LUOYI_MYSQL_DATABASE", "luoyi_esg"),
     "charset": "utf8mb4",
     "cursorclass": DictCursor,

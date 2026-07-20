@@ -1,46 +1,31 @@
 # 本地 MySQL 实例连接说明
 
-当前 MySQL 使用免安装 zip 方式部署在 E 盘，不注册 Windows 服务。
+当前 MySQL 使用免安装 zip 方式部署，不注册 Windows 服务。
 
-## 安装位置
-
-```text
-MySQL Home: E:\mysql\mysql-8.4.9-winx64
-Data Dir:   E:\mysql\data-8.4-luoyi
-Config:     E:\mysql\my-luoyi.cnf
-SQL Copy:   E:\mysql\luoyi-sql
-```
-
-## 连接信息
+## 默认连接参数
 
 ```text
 Host: 127.0.0.1
 Port: 3307
 Database: luoyi_esg
-Root user: root
-Root password: Luoyi_Root_2026!
 App user: luoyi_app
-App password: Luoyi_App_2026!
+Password: 通过 LUOYI_MYSQL_PASSWORD 环境变量设置
 ```
 
-## 启动
+完整环境变量见项目根目录 `.env.example`。真实口令只能保存在本地 `.env`、服务器环境变量或密钥管理系统中，不得提交到仓库。
+
+## 启动与验证
+
+启动 MySQL 后，设置当前终端所需的环境变量，再启动后端：
 
 ```powershell
-Start-Process -FilePath "E:\mysql\mysql-8.4.9-winx64\bin\mysqld.exe" -ArgumentList "--defaults-file=E:\mysql\my-luoyi.cnf" -WindowStyle Hidden
+$env:LUOYI_DB_MODE = "mysql"
+$env:LUOYI_MYSQL_HOST = "127.0.0.1"
+$env:LUOYI_MYSQL_PORT = "3307"
+$env:LUOYI_MYSQL_DATABASE = "luoyi_esg"
+$env:LUOYI_MYSQL_USER = "luoyi_app"
+$env:LUOYI_MYSQL_PASSWORD = Read-Host "MySQL password"
+powershell.exe -ExecutionPolicy Bypass -File .\server\start_backend.ps1
 ```
 
-## 停止
-
-```powershell
-E:\mysql\mysql-8.4.9-winx64\bin\mysqladmin.exe --host=127.0.0.1 --port=3307 --user=root --password=Luoyi_Root_2026! shutdown
-```
-
-## 执行校验
-
-```powershell
-E:\mysql\mysql-8.4.9-winx64\bin\mysql.exe --host=127.0.0.1 --port=3307 --user=root --password=Luoyi_Root_2026! --default-character-set=utf8mb4 luoyi_esg < E:\mysql\luoyi-sql\06_validation_queries.sql
-```
-
-## 说明
-
-当前实例用于罗宜高速 ESG 原型后端联调和数据库设计验证。未注册系统服务，重启电脑后需要手动启动。
+当前实例仅用于罗宜高速 ESG 原型后端联调和数据库设计验证。

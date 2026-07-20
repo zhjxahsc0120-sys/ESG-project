@@ -172,7 +172,7 @@ ON DUPLICATE KEY UPDATE continuous_days=VALUES(continuous_days);
 INSERT INTO indicator_result
 (indicator_code, group_code, label, full_name, value, value_text, unit, display_order, calculated_at, published_at)
 VALUES
-('E01', 'E', '环境监测超标', '环境监测超标项次', 2, NULL, '项次', 1, '2026-07-13 10:20:00', '2026-07-13 10:30:00'),
+('E01', 'E', '环境监测超标项次', '环境监测超标项次', 2, NULL, '项次', 1, '2026-07-13 10:20:00', '2026-07-13 10:30:00'),
 ('E02', 'E', '未闭环环保问题', '当前未闭环环保问题事项数', 5, NULL, '项', 2, '2026-07-13 10:20:00', '2026-07-13 10:30:00'),
 ('E03', 'E', '未闭环水保问题', '当前未闭环水保问题事项数', 7, NULL, '项', 3, '2026-07-13 10:20:00', '2026-07-13 10:30:00'),
 ('E04', 'E', '碳排放强度', '碳排放强度', 12856, NULL, 'tCO₂e', 4, '2026-07-13 10:20:00', '2026-07-13 10:30:00'),

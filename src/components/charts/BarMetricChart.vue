@@ -1,75 +1,81 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import * as echarts from 'echarts'
+import { computed } from 'vue'
 
 const props = defineProps<{
   data: { label: string; value: number }[]
 }>()
 
-const chartRef = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+const maxValue = computed(() => Math.max(...props.data.map((item) => item.value), 1))
 
-function initChart() {
-  if (!chartRef.value) return
-  chart = echarts.init(chartRef.value)
-  updateOption()
-  window.addEventListener('resize', onResize)
+function progressWidth(value: number) {
+  return `${(value / maxValue.value) * 100}%`
 }
-
-function updateOption() {
-  if (!chart) return
-  chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 10, right: 30, bottom: 10, left: 10, containLabel: true },
-    xAxis: {
-      type: 'value',
-      show: false,
-      max: Math.max(...props.data.map((d) => d.value), 1),
-    },
-    yAxis: {
-      type: 'category',
-      data: props.data.map((d) => d.label),
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { color: '#8fa9c8', fontSize: 11 },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: props.data.map((d) => d.value),
-        barWidth: 10,
-        itemStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-            { offset: 0, color: 'rgba(47, 156, 255, 0.3)' },
-            { offset: 1, color: '#2f9cff' },
-          ]),
-          borderRadius: [0, 5, 5, 0],
-        },
-        label: {
-          show: true,
-          position: 'right',
-          formatter: '{c} 项',
-          color: '#e8f3ff',
-          fontSize: 11,
-        },
-      },
-    ],
-  })
-}
-
-function onResize() {
-  chart?.resize()
-}
-
-onMounted(initChart)
-onUnmounted(() => {
-  window.removeEventListener('resize', onResize)
-  chart?.dispose()
-})
-
-watch(() => props.data, updateOption, { deep: true })
 </script>
 
 <template>
-  <div ref="chartRef" class="chart-container" />
+  <div class="bar-metric-list">
+    <div v-for="item in data" :key="item.label" class="bar-metric-row">
+      <span class="bar-metric-name">{{ item.label }}</span>
+      <span class="bar-metric-track">
+        <span class="bar-metric-fill" :style="{ width: progressWidth(item.value) }" />
+      </span>
+      <span class="bar-metric-value">{{ item.value }}项</span>
+    </div>
+  </div>
 </template>
+
+<style scoped lang="scss">
+.bar-metric-list {
+  flex: 1;
+  display: grid;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bar-metric-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 34px;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bar-metric-name,
+.bar-metric-value {
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.bar-metric-name {
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.bar-metric-value {
+  color: var(--text-main);
+  font-weight: 600;
+  text-align: right;
+}
+
+.bar-metric-track {
+  display: block;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(47, 156, 255, 0.12);
+}
+
+.bar-metric-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(47, 156, 255, 0.35), #2f9cff);
+}
+</style>

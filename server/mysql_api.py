@@ -8,6 +8,8 @@ import re
 from typing import Any
 
 from mysql_db import mysql_connect
+from carbon_benefit_overview import get_carbon_benefit_overview
+from monthly_report_overview import get_monthly_report_overview
 
 
 GROUP_META = {
@@ -73,20 +75,55 @@ def get_dashboard_kpis() -> dict:
     )
     groups: dict[str, dict] = {key: {**meta, "items": []} for key, meta in GROUP_META.items()}
     for row in rows:
+        is_e04 = row["indicator_code"] == "E04"
         groups[row["group_code"]]["items"].append(
             {
                 "key": row["indicator_code"],
-                "label": row["label"],
-                "fullName": row["full_name"],
+                "label": "项目累计碳排放" if is_e04 else row["label"],
+                "fullName": "项目累计碳排放" if is_e04 else row["full_name"],
                 "value": value_for_json(row["value"]),
-                "unit": row["unit"],
+                "unit": "tCO₂e" if is_e04 else row["unit"],
             }
         )
+    e01_row = query_one(
+        """
+        SELECT COALESCE(SUM(exceed_count), 0) AS total
+        FROM env_monitoring_record
+        WHERE monitor_date >= '2026-07-01'
+          AND monitor_date < '2026-08-01'
+          AND exceed_count > 0
+        """
+    )
+    e02_row = query_one("SELECT COUNT(*) AS c FROM env_issue_record WHERE issue_status <> '已闭环'")
     e03_row = query_one("SELECT COUNT(*) AS c FROM water_protection_issue WHERE issue_status <> '已闭环'")
     e04_row = query_one("SELECT COALESCE(SUM(carbon_emission), 0) AS total FROM carbon_emission_activity")
+    s02_row = query_one(
+        """
+        SELECT COUNT(*) AS c
+        FROM safety_risk_point
+        WHERE risk_level IN ('重大', '较大') AND control_status <> '已销号'
+        """
+    )
+    s03_row = query_one("SELECT COUNT(*) AS c FROM labor_dispute_record WHERE status <> '已办结'")
+    s04_row = query_one("SELECT COUNT(*) AS c FROM appeal_record WHERE status <> '已办结'")
+    s01_detail = get_s01_detail()
+    g01_row = query_one("SELECT COUNT(*) AS c FROM compliance_procedure WHERE status <> '已完成'")
+    g02_row = query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status IN ('临期', '逾期')")
+    g03_row = query_one("SELECT COUNT(*) AS c FROM rectification_record WHERE status <> '已关闭'")
+    g04_row = query_one("SELECT COUNT(*) AS c FROM compliance_material_gap WHERE status <> '已补齐'")
     dynamic_values = {
+        "E01": {"value": round(float(e01_row["total"])) if e01_row and e01_row["total"] is not None else None, "unit": "项次"},
+        "E02": {"value": int(e02_row["c"]) if e02_row and e02_row["c"] is not None else None, "unit": "项"},
         "E03": {"value": int(e03_row["c"]) if e03_row and e03_row["c"] else None, "unit": "项"},
         "E04": {"value": round(float(e04_row["total"])) if e04_row and float(e04_row["total"] or 0) > 0 else None, "unit": "tCO₂e"},
+        "S01": {"value": int(s01_detail["continuousDays"]) if s01_detail and s01_detail.get("continuousDays") is not None else None, "unit": "天"},
+        "S02": {"value": int(s02_row["c"]) if s02_row and s02_row["c"] is not None else None, "unit": "项"},
+        "S03": {"value": int(s03_row["c"]) if s03_row and s03_row["c"] is not None else None, "unit": "项"},
+        "S04": {"value": int(s04_row["c"]) if s04_row and s04_row["c"] is not None else None, "unit": "项"},
+        "G01": {"value": int(g01_row["c"]) if g01_row and g01_row["c"] is not None else None, "unit": "项"},
+        "G02": {"value": int(g02_row["c"]) if g02_row and g02_row["c"] is not None else None, "unit": "项"},
+        "G03": {"value": int(g03_row["c"]) if g03_row and g03_row["c"] is not None else None, "unit": "项"},
+        "G04": {"value": int(g04_row["c"]) if g04_row and g04_row["c"] is not None else None, "unit": "项"},
     }
     for group in groups.values():
         for item in group["items"]:
@@ -214,19 +251,32 @@ def get_e01_env_monitoring_detail() -> dict | None:
     current_count = sum(int(row.get("exceed_count") or 0) for row in rows)
     dust_count = sum(int(row.get("dust_exceed_count") or 0) for row in rows)
     noise_count = sum(int(row.get("noise_exceed_count") or 0) for row in rows)
-    rechecked_count = sum(1 for row in rows if row.get("recheck_status") == "已复测")
+    completed_statuses = {"已复测", "复测达标", "复测仍超标"}
+    rechecked_count = sum(1 for row in rows if row.get("recheck_status") in completed_statuses)
     pending_count = sum(1 for row in rows if row.get("recheck_status") == "待复测")
+    still_exceeded_count = sum(1 for row in rows if row.get("recheck_status") == "复测仍超标")
     point_count = len({row.get("monitor_point") for row in rows if row.get("monitor_point")})
 
     detail = with_snapshot_base("E01")
     detail.update(
         {
+            "fullName": "环境监测超标项次",
             "summary": [
-                {"label": "当前超标项", "value": current_count, "unit": "项"},
-                {"label": "本月新增", "value": current_count, "unit": "项"},
-                {"label": "已复测", "value": rechecked_count, "unit": "项"},
-                {"label": "待复测", "value": pending_count, "unit": "项"},
+                {"label": "本月超标项次", "value": current_count, "unit": "项次"},
+                {"label": "已完成复测", "value": rechecked_count, "unit": "项次"},
+                {"label": "待复测", "value": pending_count, "unit": "项次"},
+                {"label": "复测仍超标", "value": still_exceeded_count, "unit": "项次"},
                 {"label": "涉及监测点", "value": point_count, "unit": "个"},
+            ],
+            "detailColumns": [
+                {"key": "point", "label": "监测点", "width": "21%"},
+                {"key": "time", "label": "监测时间", "width": "11%"},
+                {"key": "factor", "label": "类别/因子", "width": "16%"},
+                {"key": "initialValue", "label": "初检值", "width": "11%"},
+                {"key": "recheckValue", "label": "复测值", "width": "13%"},
+                {"key": "limit", "label": "标准限值", "width": "12%"},
+                {"key": "multiple", "label": "超标倍数", "width": "8%"},
+                {"key": "status", "label": "复测状态", "width": "8%"},
             ],
             "categoryData": [
                 {"name": "扬尘", "value": dust_count},
@@ -235,13 +285,16 @@ def get_e01_env_monitoring_detail() -> dict | None:
             ],
             "detailData": [
                 {
+                    "id": row.get("id"),
+                    "category": row.get("monitor_type") or "",
                     "point": row.get("monitor_point") or "",
                     "time": value_for_json(row.get("monitor_date")),
                     "factor": row.get("factor_name") or row.get("monitor_type") or "",
-                    "value": row.get("detected_value") or "",
-                    "limit": row.get("limit_value") or "",
-                    "multiple": value_for_json(row.get("exceed_multiple")),
-                    "status": row.get("recheck_status") or "",
+                    "initialValue": row.get("initial_detected_value") or row.get("detected_value") or "—",
+                    "recheckValue": row.get("recheck_detected_value") or "—",
+                    "limit": row.get("limit_value") or "—",
+                    "multiple": value_for_json(row.get("exceed_multiple")) if row.get("exceed_multiple") is not None else "—",
+                    "status": "复测达标" if row.get("recheck_status") == "已复测" else (row.get("recheck_status") or ""),
                 }
                 for row in rows
             ],
@@ -264,55 +317,77 @@ def get_e02_env_issue_detail() -> dict | None:
     )
     if not open_rows:
         return None
-    new_count = query_one(
-        """
-        SELECT COUNT(*) AS c
-        FROM env_issue_record
-        WHERE issue_status <> '已闭环'
-          AND found_date >= '2026-07-01'
-          AND found_date < '2026-08-01'
-        """
-    )["c"]
-    closed_count = query_one(
-        """
-        SELECT COUNT(*) AS c
-        FROM env_issue_record
-        WHERE closed_date >= '2026-07-01'
-          AND closed_date < '2026-08-01'
-        """
-    )["c"]
     overdue_count = sum(1 for row in open_rows if int(row.get("overdue") or 0) == 1)
-    avg_duration = round(sum(int(row.get("duration_days") or 0) for row in open_rows) / len(open_rows))
+    rectifying_count = sum(1 for row in open_rows if row.get("issue_status") == "整改中")
+    pending_review_count = sum(1 for row in open_rows if row.get("issue_status") == "待复查")
+    pending_close_count = sum(1 for row in open_rows if row.get("issue_status") == "待销项")
 
     detail = with_snapshot_base("E02")
+
+    def e02_source_id(row: dict) -> str:
+        mapped = {
+            420001: "E02-003",
+            420002: "E02-001",
+            420003: "E02-002",
+            420004: "E02-004",
+            420005: "E02-005",
+        }
+        row_id = int(row.get("id") or 0)
+        return mapped.get(row_id, f"E02-{row_id}")
+
+    e02_gis_feature_map = {
+        "E02-001": "section-1-1",
+        "E02-003": "section-2-1",
+        "E02-005": "eco-1-1",
+    }
+
     detail.update(
         {
             "summary": [
                 {"label": "当前未闭环", "value": len(open_rows), "unit": "项"},
-                {"label": "本月新增", "value": int(new_count), "unit": "项"},
-                {"label": "本月闭环", "value": int(closed_count), "unit": "项"},
-                {"label": "逾期未闭环", "value": overdue_count, "unit": "项"},
-                {"label": "平均处置时长", "value": avg_duration, "unit": "天"},
+                {"label": "整改中", "value": rectifying_count, "unit": "项"},
+                {"label": "待复查", "value": pending_review_count, "unit": "项"},
+                {"label": "待销项", "value": pending_close_count, "unit": "项"},
+                {"label": "已逾期", "value": overdue_count, "unit": "项"},
             ],
             "statusData": [
-                {"name": "整改中", "value": sum(1 for row in open_rows if row.get("issue_status") == "整改中")},
-                {"name": "待复查", "value": sum(1 for row in open_rows if row.get("issue_status") == "待复查")},
-                {"name": "待销项", "value": sum(1 for row in open_rows if row.get("issue_status") == "待销项")},
+                {"name": "整改中", "value": rectifying_count},
+                {"name": "待复查", "value": pending_review_count},
+                {"name": "待销项", "value": pending_close_count},
+            ],
+            "chartTitle": "当前未闭环事项办理状态",
+            "detailColumns": [
+                {"key": "name", "label": "问题名称", "width": "22%"},
+                {"key": "category", "label": "问题类型", "width": "11%"},
+                {"key": "time", "label": "发现时间", "width": "11%"},
+                {"key": "level", "label": "等级", "width": "8%"},
+                {"key": "department", "label": "责任部门", "width": "14%"},
+                {"key": "deadline", "label": "整改截止", "width": "11%"},
+                {"key": "mainStatus", "label": "办理状态", "width": "11%"},
+                {"key": "deadlineStatus", "label": "时限状态", "width": "12%"},
             ],
             "detailData": [
                 {
+                    "id": e02_source_id(row),
+                    "sourceId": e02_source_id(row),
+                    "sourceTable": "env_issue_record",
+                    "rawId": row.get("id"),
+                    "gisFeatureId": e02_gis_feature_map.get(e02_source_id(row)),
+                    "category": row.get("issue_type") or "",
                     "name": row.get("issue_name") or row.get("issue_type") or "",
                     "time": value_for_json(row.get("found_date")),
                     "level": row.get("issue_level") or "",
                     "department": row.get("responsible_department") or "",
                     "deadline": value_for_json(row.get("deadline")),
-                    "status": "逾期未闭环" if int(row.get("overdue") or 0) == 1 else row.get("issue_status"),
+                    "status": row.get("issue_status"),
                     "mainStatus": row.get("issue_status"),
                     "overdue": bool(row.get("overdue")),
+                    "deadlineStatus": "已逾期" if int(row.get("overdue") or 0) == 1 else "正常",
                 }
                 for row in open_rows
             ],
             "dataSource": "环保问题明细表 env_issue_record",
+            "statisticsAsOf": "2026-07-13",
             "updateTime": "2026-07-13 09:00",
             "isMock": False,
         }
@@ -356,19 +431,36 @@ def get_e03_water_protection_detail() -> dict | None:
         {
             "summary": [
                 {"label": "当前未闭环", "value": len(open_rows), "unit": "项"},
-                {"label": "本月新增", "value": int(new_count), "unit": "项"},
+                {"label": "本月新增未闭环", "value": int(new_count), "unit": "项"},
                 {"label": "本月闭环", "value": int(closed_count), "unit": "项"},
                 {"label": "逾期未闭环", "value": overdue_count, "unit": "项"},
                 {"label": "涉及标段", "value": segment_count, "unit": "个"},
             ],
+            "chartTitle": "各标段未闭环水保问题分布",
+            "detailTitle": "未闭环水保问题明细",
+            "detailColumns": [
+                {"key": "name", "label": "问题名称", "width": "20%"},
+                {"key": "segment", "label": "所属标段", "width": "10%"},
+                {"key": "category", "label": "问题类型", "width": "10%"},
+                {"key": "time", "label": "发现时间", "width": "11%"},
+                {"key": "department", "label": "责任部门", "width": "14%"},
+                {"key": "deadline", "label": "整改截止", "width": "11%"},
+                {"key": "mainStatus", "label": "办理状态", "width": "12%"},
+                {"key": "deadlineStatus", "label": "时限状态", "width": "12%"},
+            ],
             "detailData": [
                 {
+                    "id": int(row["id"]),
                     "name": row.get("issue_name") or row.get("issue_type") or "水保问题",
-                    "time": value_for_json(row.get("found_date")),
                     "segment": row.get("segment_name") or "",
-                    "type": row.get("issue_type") or "",
+                    "category": row.get("issue_type") or "",
+                    "time": value_for_json(row.get("found_date")),
+                    "department": row.get("responsible_department") or "",
                     "deadline": value_for_json(row.get("deadline")),
-                    "status": row.get("issue_status") or "",
+                    "mainStatus": "未闭环" if int(row.get("overdue") or 0) == 1 or row.get("issue_status") == "逾期未闭环" else (row.get("issue_status") or "未闭环"),
+                    "overdue": bool(row.get("overdue")),
+                    "deadlineStatus": "已逾期" if int(row.get("overdue") or 0) == 1 else "正常",
+                    "statusStageKnown": not (int(row.get("overdue") or 0) == 1 or row.get("issue_status") == "逾期未闭环"),
                 }
                 for row in open_rows
             ],
@@ -394,38 +486,196 @@ def get_e04_carbon_emission_detail() -> dict | None:
     total_emission = sum(float(row.get("carbon_emission") or 0) for row in rows)
     current_month = next((row for row in reversed(rows) if row.get("period_value") == "2026-07"), rows[-1])
     month_emission = float(current_month.get("carbon_emission") or 0)
-    baseline_total = sum(float(row.get("baseline_emission") or 0) for row in rows)
-    output_total = sum(float(row.get("output_value_wan") or 0) for row in rows)
-    reduction_rate = round((baseline_total - total_emission) / baseline_total * 100, 1) if baseline_total else 0
-    intensity = round(total_emission / output_total, 3) if output_total else 0
+    factors = {
+        row["factor_code"]: row
+        for row in query_all(
+            """
+            SELECT id, factor_code, factor_name, factor_value, factor_unit,
+                   factor_version, factor_source, data_nature, verification_status,
+                   evidence_document_id
+            FROM carbon_emission_factor
+            WHERE factor_version='DEMO-EF-2026-v0.1'
+            """
+        )
+    }
+    required_factor_codes = {
+        "DEMO_DIESEL", "DEMO_ELECTRICITY", "DEMO_CEMENT",
+        "DEMO_STEEL", "DEMO_ASPHALT", "DEMO_TRANSPORT",
+    }
+    if not required_factor_codes.issubset(factors):
+        return None
 
-    source_values = [
-        ("施工用油", sum(float(row.get("diesel_emission") or 0) for row in rows), "↓ 2.3%"),
-        ("施工用电", sum(float(row.get("electricity_emission") or 0) for row in rows), "↑ 1.1%"),
-        ("主要材料", sum(float(row.get("material_emission") or 0) for row in rows), "↓ 3.5%"),
-        ("其他", sum(float(row.get("other_emission") or 0) for row in rows), "↑ 0.8%"),
+    material_rows = query_all(
+        """
+        SELECT m.id, m.period_value, m.material_name, m.material_usage, m.material_unit,
+               m.carbon_activity_id, m.carbon_emission, m.document_id,
+               m.data_nature, m.verification_status,
+               f.factor_name, f.factor_value, f.factor_unit, f.factor_version, f.factor_source
+        FROM carbon_material_usage m
+        JOIN carbon_emission_factor f ON f.id=m.emission_factor_id
+        WHERE m.carbon_activity_id BETWEEN 720001 AND 720006
+          AND m.data_nature='demo'
+        ORDER BY m.period_value, m.id
+        """
+    )
+    material_groups: dict[str, dict] = {}
+    for row in material_rows:
+        group = material_groups.setdefault(
+            row["material_name"],
+            {
+                "material": row["material_name"],
+                "activityValue": 0.0,
+                "activityUnit": row.get("material_unit") or "t",
+                "emissionFactor": float(row.get("factor_value") or 0),
+                "factorUnit": row.get("factor_unit") or "",
+                "emission": 0.0,
+                "factorName": row.get("factor_name") or "",
+                "factorVersion": row.get("factor_version") or "",
+                "factorSource": row.get("factor_source") or "",
+                "dataNature": row.get("data_nature") or "demo",
+                "verificationStatus": row.get("verification_status") or "待业务核验",
+                "evidenceStatus": "未关联",
+                "monthlyData": [],
+            },
+        )
+        activity_value = float(row.get("material_usage") or 0)
+        emission_value = float(row.get("carbon_emission") or 0)
+        group["activityValue"] += activity_value
+        group["emission"] += emission_value
+        if row.get("document_id"):
+            group["evidenceStatus"] = "已关联演示资料"
+        group["monthlyData"].append(
+            {
+                "period": row.get("period_value") or "",
+                "activityValue": activity_value,
+                "emission": emission_value,
+            }
+        )
+
+    material_details = []
+    for name in ("水泥", "钢材", "沥青"):
+        item = material_groups.get(name)
+        if item:
+            item["activityValue"] = round(item["activityValue"], 8)
+            item["emission"] = round(item["emission"], 6)
+            material_details.append(item)
+
+    def source_item(
+        code: str,
+        source: str,
+        activity_value: float,
+        activity_unit: str,
+        emission: float,
+        factor_code: str | None,
+        material_details_value: list[dict] | None = None,
+    ) -> dict:
+        factor = factors.get(factor_code or "")
+        evidence_linked = any(row.get("document_id") for row in rows)
+        item = {
+            "sourceCode": code,
+            "source": source,
+            "activityValue": round(activity_value, 8),
+            "activityUnit": activity_unit,
+            "emissionFactor": float(factor["factor_value"]) if factor else None,
+            "factorUnit": factor.get("factor_unit") if factor else "分项核算",
+            "factorName": factor.get("factor_name") if factor else "主要材料分项演示排放因子",
+            "emission": round(emission, 6),
+            "share": round(emission / total_emission * 100, 1) if total_emission else 0,
+            "factorVersion": factor.get("factor_version") if factor else "DEMO-EF-2026-v0.1",
+            "factorSource": factor.get("factor_source") if factor else "系统演示测试数据，非正式核算依据",
+            "dataNature": factor.get("data_nature") if factor else "demo",
+            "verificationStatus": factor.get("verification_status") if factor else "待业务核验",
+            "evidenceStatus": "已关联演示资料" if evidence_linked else "未关联",
+        }
+        if material_details_value is not None:
+            item["materialDetails"] = material_details_value
+            item["evidenceStatus"] = (
+                "已关联演示资料"
+                if any(detail_item.get("evidenceStatus") != "未关联" for detail_item in material_details_value)
+                else "未关联"
+            )
+        return item
+
+    source_rows = [
+        source_item(
+            "diesel", "施工用油",
+            sum(float(row.get("diesel_usage") or 0) for row in rows), "L",
+            sum(float(row.get("diesel_emission") or 0) for row in rows), "DEMO_DIESEL",
+        ),
+        source_item(
+            "electricity", "施工用电",
+            sum(float(row.get("electricity_usage") or 0) for row in rows), "kWh",
+            sum(float(row.get("electricity_emission") or 0) for row in rows), "DEMO_ELECTRICITY",
+        ),
+        source_item(
+            "material", "主要材料",
+            sum(float(row.get("material_usage") or 0) for row in rows), "t",
+            sum(float(row.get("material_emission") or 0) for row in rows), None, material_details,
+        ),
+        source_item(
+            "transport", "施工运输",
+            sum(float(row.get("transport_usage") or 0) for row in rows), "t·km",
+            sum(float(row.get("other_emission") or 0) for row in rows), "DEMO_TRANSPORT",
+        ),
     ]
+
+    cumulative = 0.0
+    monthly_data = []
+    for row in rows:
+        monthly_emission = float(row.get("carbon_emission") or 0)
+        cumulative += monthly_emission
+        monthly_data.append(
+            {
+                "period": row.get("period_value") or "",
+                "monthlyEmission": round(monthly_emission, 4),
+                "cumulativeEmission": round(cumulative, 4),
+            }
+        )
+
+    period_start = str(rows[0].get("period_value") or "")
+    period_end = str(rows[-1].get("period_value") or "")
+    period_label = (
+        f"{period_start[:4]}年{int(period_start[5:7])}月—{int(period_end[5:7])}月"
+        if len(period_start) >= 7 and len(period_end) >= 7
+        else f"{period_start}—{period_end}"
+    )
+    latest_update = max(
+        (row.get("updated_at") or row.get("created_at") for row in rows),
+        default=None,
+    )
 
     detail = with_snapshot_base("E04")
     detail.update(
         {
             "summary": [
                 {"label": "累计碳排放", "value": round(total_emission), "unit": "tCO₂e"},
-                {"label": "本月新增", "value": round(month_emission), "unit": "tCO₂e"},
-                {"label": "较基准下降", "value": reduction_rate, "unit": "%"},
-                {"label": "单位产值排放", "value": intensity, "unit": "tCO₂e/万元"},
+                {"label": "本期排放", "value": round(month_emission, 2), "unit": "tCO₂e"},
+                {"label": "核算期间", "value": period_label},
+                {"label": "排放来源", "value": len(source_rows), "unit": "类"},
+                {"label": "数据性质", "value": "演示数据"},
             ],
-            "detailData": [
-                {
-                    "source": name,
-                    "value": f"{round(value):,} tCO₂e",
-                    "proportion": f"{round(value / total_emission * 100, 1) if total_emission else 0}%",
-                    "trend": trend,
-                }
-                for name, value, trend in source_values
+            "chartTitle": "月度排放与累计碳排放",
+            "detailTitle": "排放来源核算汇总",
+            "detailColumns": [
+                {"key": "source", "label": "排放来源", "width": "14%"},
+                {"key": "activityValue", "label": "活动数据", "width": "21%"},
+                {"key": "emissionFactor", "label": "排放因子", "width": "25%"},
+                {"key": "emission", "label": "排放量", "width": "14%"},
+                {"key": "share", "label": "占比", "width": "10%"},
+                {"key": "verificationStatus", "label": "核验状态", "width": "16%"},
             ],
-            "dataSource": "碳排放活动明细表 carbon_emission_activity",
-            "updateTime": "2026-07-13 00:00",
+            "detailData": source_rows,
+            "monthlyData": monthly_data,
+            "materialDetails": material_details,
+            "accountingBoundary": ["施工用油", "施工用电", "主要材料", "施工运输（演示）"],
+            "demoNotice": "当前活动数据及排放因子为系统演示测试数据，尚未作为正式核算依据。",
+            "statisticsAsOf": period_end,
+            "dataNature": "demo",
+            "dataSource": "碳排放活动明细表 carbon_emission_activity；材料用量表 carbon_material_usage；排放因子表 carbon_emission_factor",
+            "updateTime": value_for_json(latest_update),
+            "completeness": "待业务核验",
+            "completenessStatus": "pending",
+            # 数据性质为 demo，但响应由 MySQL 业务表聚合，不是前端 Mock。
             "isMock": False,
         }
     )
@@ -433,6 +683,10 @@ def get_e04_carbon_emission_detail() -> dict | None:
 
 
 def get_carbon_topic_detail() -> dict | None:
+    enhanced = get_carbon_benefit_overview()
+    if enhanced is not None:
+        return enhanced
+
     rows = query_all(
         """
         SELECT *
@@ -471,10 +725,10 @@ def get_carbon_topic_detail() -> dict | None:
     month_emission = actual_data[-1] if actual_data else 0
 
     source_values = [
-        ("施工用油", sum(float(row.get("diesel_emission") or 0) for row in rows), "#69e36f", "↓ 2.3%", "柴油消耗优化"),
-        ("施工用电", sum(float(row.get("electricity_emission") or 0) for row in rows), "#2f9cff", "↑ 1.1%", "隧道掘进增加"),
+        ("施工用油", sum(float(row.get("diesel_emission") or 0) for row in rows), "#2f9cff", "↓ 2.3%", "柴油消耗优化"),
+        ("施工用电", sum(float(row.get("electricity_emission") or 0) for row in rows), "#69e36f", "↑ 1.1%", "隧道掘进增加"),
         ("主要材料", sum(float(row.get("material_emission") or 0) for row in rows), "#a66cff", "↓ 3.5%", "低碳材料替代"),
-        ("其他", sum(float(row.get("other_emission") or 0) for row in rows), "#ffb347", "↑ 0.8%", "运输增加"),
+        ("施工运输", sum(float(row.get("other_emission") or 0) for row in rows), "#ffb347", "↑ 0.8%", "系统演示测试数据，非正式核算依据"),
     ]
     source_summary = [
         {"label": name, "value": round(value), "unit": "tCO₂e"}
@@ -495,17 +749,172 @@ def get_carbon_topic_detail() -> dict | None:
         for name, value, _color, trend, note in source_values
     ]
 
+    factor_rows = query_all(
+        """
+        SELECT factor_code, factor_name, factor_value, factor_unit, factor_version,
+               factor_source, data_nature, verification_status,
+               CASE WHEN evidence_document_id IS NULL THEN '未关联' ELSE '已关联' END AS evidence_status
+        FROM carbon_emission_factor
+        WHERE factor_code LIKE 'DEMO_%%'
+        ORDER BY id
+        """
+    )
+    factor_by_code = {row["factor_code"]: row for row in factor_rows}
+    material_rows = query_all(
+        """
+        SELECT m.material_name, SUM(m.material_usage) AS activity_value,
+               MAX(m.material_unit) AS activity_unit, SUM(m.carbon_emission) AS emission,
+               f.factor_name, f.factor_value, f.factor_unit, f.factor_version,
+               f.factor_source, m.data_nature, m.verification_status,
+               CASE WHEN f.evidence_document_id IS NULL THEN '未关联' ELSE '已关联' END AS evidence_status
+        FROM carbon_material_usage m
+        LEFT JOIN carbon_emission_factor f ON f.id = m.emission_factor_id
+        GROUP BY m.material_name, f.factor_name, f.factor_value, f.factor_unit,
+                 f.factor_version, f.factor_source, m.data_nature,
+                 m.verification_status, f.evidence_document_id
+        ORDER BY FIELD(m.material_name, '水泥', '钢材', '沥青'), m.material_name
+        """
+    )
+    material_breakdown = [
+        {
+            "material": row["material_name"],
+            "activityValue": round(float(row["activity_value"] or 0), 2),
+            "activityUnit": row["activity_unit"],
+            "emissionFactor": float(row["factor_value"] or 0),
+            "factorUnit": row["factor_unit"],
+            "emission": round(float(row["emission"] or 0)),
+            "factorName": row["factor_name"],
+            "factorVersion": row["factor_version"],
+            "factorSource": row["factor_source"],
+            "dataNature": row["data_nature"],
+            "verificationStatus": row["verification_status"],
+            "evidenceStatus": row["evidence_status"],
+        }
+        for row in material_rows
+    ]
+    activity_totals = query_one(
+        """
+        SELECT SUM(diesel_usage) diesel_usage, SUM(electricity_usage) electricity_usage,
+               SUM(material_usage) material_usage, SUM(transport_usage) transport_usage
+        FROM carbon_emission_activity
+        """
+    ) or {}
+    source_codes = (
+        ("diesel", "施工用油", "diesel_usage", "L", "DEMO_DIESEL", 5628),
+        ("electricity", "施工用电", "electricity_usage", "kWh", "DEMO_ELECTRICITY", 3857),
+        ("material", "主要材料", "material_usage", "t", None, 2486),
+        ("transport", "施工运输", "transport_usage", "t·km", "DEMO_TRANSPORT", 885),
+    )
+    emission_sources = []
+    for code, name, activity_field, activity_unit, factor_code, emission in source_codes:
+        factor = factor_by_code.get(factor_code or "", {})
+        emission_sources.append(
+            {
+                "sourceCode": code,
+                "source": name,
+                "activityValue": round(float(activity_totals.get(activity_field) or 0), 2),
+                "activityUnit": activity_unit,
+                "emissionFactor": float(factor["factor_value"]) if factor else None,
+                "factorUnit": factor.get("factor_unit") or "分项核算",
+                "factorName": factor.get("factor_name") or "主要材料分项演示排放因子",
+                "emission": emission,
+                "share": round(emission / total_emission * 100, 1),
+                "factorVersion": factor.get("factor_version") or "DEMO-EF-2026-v0.1",
+                "dataNature": "demo",
+                "verificationStatus": "待业务核验",
+                "evidenceStatus": factor.get("evidence_status") or "未关联",
+                "materialDetails": material_breakdown if code == "material" else [],
+            }
+        )
+
+    accounting_rows = query_all(
+        """
+        SELECT accounting_code, accounting_month, boundary_code, baseline_emission,
+               actual_emission, accounted_reduction, unit, data_nature,
+               verification_status, evidence_status
+        FROM carbon_reduction_accounting
+        WHERE is_demo = 1
+        ORDER BY accounting_month, id
+        """
+    )
+    measures = query_all(
+        """
+        SELECT measure_code, measure_name, measure_category, application_scope,
+               responsible_department, implementation_status, estimated_reduction,
+               accounted_reduction, verified_reduction, reduction_unit,
+               investment_cost, operating_saving, avoided_cost, net_cost_impact,
+               currency_unit, data_nature, verification_status, evidence_status
+        FROM carbon_reduction_measure
+        WHERE is_demo = 1
+        ORDER BY measure_code
+        """
+    )
+    accounting_detail = [
+        {
+            "accountingCode": row["accounting_code"],
+            "month": row["accounting_month"],
+            "boundaryCode": row["boundary_code"],
+            "baselineEmission": float(row["baseline_emission"]),
+            "actualEmission": float(row["actual_emission"]),
+            "accountedReduction": float(row["accounted_reduction"]),
+            "unit": row["unit"],
+            "dataNature": row["data_nature"],
+            "verificationStatus": row["verification_status"],
+            "evidenceStatus": row["evidence_status"],
+        }
+        for row in accounting_rows
+    ]
+    measure_detail = [
+        {
+            "measureCode": row["measure_code"],
+            "measureName": row["measure_name"],
+            "category": row["measure_category"],
+            "scope": row["application_scope"],
+            "department": row["responsible_department"],
+            "status": row["implementation_status"],
+            "estimatedReduction": float(row["estimated_reduction"] or 0),
+            "accountedReduction": value_for_json(row["accounted_reduction"]),
+            "verifiedReduction": value_for_json(row["verified_reduction"]),
+            "reductionUnit": row["reduction_unit"],
+            "investmentCost": float(row["investment_cost"] or 0),
+            "operatingSaving": float(row["operating_saving"] or 0),
+            "avoidedCost": float(row["avoided_cost"] or 0),
+            "netCostImpact": float(row["net_cost_impact"] or 0),
+            "currencyUnit": row["currency_unit"],
+            "dataNature": row["data_nature"],
+            "verificationStatus": row["verification_status"],
+            "evidenceStatus": row["evidence_status"],
+        }
+        for row in measures
+    ]
+    measure_estimated_total = round(sum(item["estimatedReduction"] for item in measure_detail))
+    cost_summary = {
+        "investmentCost": round(sum(item["investmentCost"] for item in measure_detail), 2),
+        "operatingSaving": round(sum(item["operatingSaving"] for item in measure_detail), 2),
+        "avoidedCost": round(sum(item["avoidedCost"] for item in measure_detail), 2),
+        "totalCostSaving": round(
+            sum(item["operatingSaving"] + item["avoidedCost"] for item in measure_detail), 2
+        ),
+        "netCostImpact": round(sum(item["netCostImpact"] for item in measure_detail), 2),
+        "currencyUnit": "万元",
+        "formula": "低碳措施节约成本 = 预计运行费用节约 + 预计材料、运输及处置支出减少",
+        "netCostFormula": "净成本影响 = 低碳措施预计投入 - 低碳措施节约成本",
+        "scopeAligned": True,
+        "notice": "演示测算，非财务确认结果。",
+    }
+
     summary = [
         {"label": "施工阶段累计碳足迹", "value": total_emission, "unit": "tCO₂e"},
         {"label": "累计核算减排量", "value": reduction, "unit": "tCO₂e"},
         {"label": "较基准下降", "value": reduction_rate, "unit": "%"},
-        {"label": "低碳措施成本影响", "value": 0, "unit": "测算口径"},
+        {"label": "低碳措施节约成本", "value": cost_summary["totalCostSaving"], "unit": "万元"},
     ]
 
     topic_data = base.get("topicData") or {}
     cumulative = topic_data.get("cumulative") or {}
     cumulative.update(
         {
+            "chartTitle": "月度排放与累计碳足迹趋势",
             "summary": [
                 {"label": "施工阶段累计碳足迹", "value": total_emission, "unit": "tCO₂e"},
                 {"label": "本月新增", "value": month_emission, "unit": "tCO₂e"},
@@ -515,11 +924,13 @@ def get_carbon_topic_detail() -> dict | None:
             "months": months,
             "monthlyData": actual_data,
             "cumulativeData": cumulative_data,
+            "boundary": "当前演示核算边界包括施工用油、施工用电、主要材料和施工运输；活动数据及排放因子均为系统演示测试数据，非正式核算依据。",
         }
     )
     benefit = topic_data.get("benefit") or {}
     benefit.update(
         {
+            "chartTitle": "基准方案与实际排放对比",
             "summary": [
                 {"label": "累计核算减排量", "value": reduction, "unit": "tCO₂e"},
                 {"label": "较基准下降", "value": reduction_rate, "unit": "%"},
@@ -531,25 +942,96 @@ def get_carbon_topic_detail() -> dict | None:
             "baselineData": baseline_data,
             "totalReduction": reduction,
             "reductionRate": reduction_rate,
+            "note": "当前基准与实际排放均为系统演示测试数据，尚未作为正式核算依据。",
         }
     )
     source = topic_data.get("source") or {}
     source.update(
         {
+            "chartTitle": "碳排放来源构成",
             "items": source_items,
             "summary": source_summary,
             "detailData": source_detail,
         }
     )
-    topic_data.update({"cumulative": cumulative, "benefit": benefit, "source": source})
+    overview = {
+        "summary": [
+            {"label": "项目累计碳排放", "value": total_emission, "unit": "tCO₂e"},
+            {"label": "本月碳排放", "value": month_emission, "unit": "tCO₂e"},
+            {"label": "累计核算减排量", "value": reduction, "unit": "tCO₂e"},
+            {"label": "在施低碳措施", "value": len(measure_detail), "unit": "项"},
+            {"label": "数据核验状态", "value": "待业务核验"},
+        ],
+        "monthlyEmissions": [
+            {"month": month, "monthlyEmission": actual, "cumulativeEmission": cumulative_data[index]}
+            for index, (month, actual) in enumerate(zip(months, actual_data))
+        ],
+        "emissionSources": emission_sources,
+        "accountingBoundary": "DEMO-CONSTRUCTION-E04",
+        "dataQuality": {"dataNature": "demo", "verificationStatus": "待业务核验", "evidenceStatus": "未关联"},
+    }
+    sources_page = {
+        "rows": emission_sources,
+        "materialBreakdown": material_breakdown,
+        "factorMetadata": [
+            {key: value_for_json(value) for key, value in row.items()}
+            for row in factor_rows
+        ],
+        "totalEmission": total_emission,
+    }
+    benefit.update(
+        {
+            "accountingRows": accounting_detail,
+            "baselineTotal": baseline_total,
+            "actualTotal": total_emission,
+            "accountedReduction": reduction,
+            "measureEstimatedReduction": measure_estimated_total,
+            "verifiedReduction": None,
+            "formula": "核算减排量 = 同口径基准排放 - 实际排放",
+            "separationNotice": "措施预计减排量与核算减排量属于不同评价路径，不直接相加。",
+        }
+    )
+    measures_costs = {"measures": measure_detail, "costSummary": cost_summary}
+    topic_data.update(
+        {
+            "overview": overview,
+            "sources": sources_page,
+            "benefit": benefit,
+            "measuresCosts": measures_costs,
+            # 兼容旧组件读取，数据仍来自本次 MySQL 聚合。
+            "cumulative": cumulative,
+            "source": source,
+            "cost": {
+                "investment": cost_summary["investmentCost"],
+                "savings": cost_summary["operatingSaving"],
+                "avoidedCost": cost_summary["avoidedCost"],
+                "totalCostSaving": cost_summary["totalCostSaving"],
+                "netCostImpact": cost_summary["netCostImpact"],
+                "note": cost_summary["notice"],
+            },
+        }
+    )
 
     base.update(
         {
+            "tabs": [
+                {"key": "overview", "label": "碳排概览"},
+                {"key": "sources", "label": "排放来源"},
+                {"key": "benefit", "label": "低碳增益"},
+                {"key": "measures-costs", "label": "措施与成本"},
+            ],
             "summary": summary,
+            "carbonCostLabel": "低碳措施节约成本",
+            "carbonCostValue": cost_summary["totalCostSaving"],
+            "carbonCostUnit": "万元",
             "topicData": topic_data,
             "detailData": source_detail,
-            "dataSource": "碳排放活动明细表 carbon_emission_activity",
-            "updateTime": "2026-07-13 00:00",
+            "dataSource": "MySQL：carbon_emission_activity / carbon_emission_factor / carbon_material_usage / carbon_reduction_accounting / carbon_reduction_measure",
+            "sourceMode": "mysql",
+            "dataNature": "demo",
+            "verificationStatus": "待业务核验",
+            "evidenceStatus": "未关联",
+            "updateTime": value_for_json(max((row.get("updated_at") for row in rows if row.get("updated_at")), default=None)),
             "isMock": False,
         }
     )
@@ -557,6 +1039,82 @@ def get_carbon_topic_detail() -> dict | None:
 
 
 def get_monthly_report_topic_detail() -> dict | None:
+    overview = get_monthly_report_overview()
+    if overview is not None:
+        base = get_dashboard_topic_snapshot("monthly-report") or {
+            "key": "MONTHLY",
+            "fullName": "月报准备与输出",
+            "theme": "blue",
+            "isTopic": True,
+        }
+        summary_data = overview["summary"]
+        summary = [
+            {"label": "资料归集率", "value": overview["readinessRate"], "unit": "%"},
+            {"label": "已归集", "value": f"{summary_data['collectedCount']}/{summary_data['totalCount']}", "unit": "项"},
+            {"label": "待处理", "value": summary_data["pendingTotal"], "unit": "项"},
+            {"label": "输出状态", "value": overview["outputStatus"]["label"], "unit": ""},
+        ]
+        progress_groups = [
+            {
+                "key": item["groupCode"],
+                "label": f"{item['groupCode']}组",
+                "value": item["progress"],
+                "collectedCount": item["collectedCount"],
+                "totalCount": item["totalCount"],
+                "color": {"E": "#69e36f", "S": "#2f9cff", "G": "#a66cff"}[item["groupCode"]],
+            }
+            for item in overview["groupProgress"]
+        ]
+        task_list = [
+            {
+                "id": item["id"],
+                "taskCode": item["taskCode"],
+                "group": item["groupCode"],
+                "name": item["taskName"],
+                "type": item["taskTypeLabel"],
+                "status": item["status"],
+                "owner": item["responsibleDepartment"],
+                "responsibleRole": item["responsibleRole"],
+                "person": item["responsibleUserName"],
+                "deadline": item["deadline"],
+            }
+            for item in overview["taskInstances"]
+        ]
+        pending_list = [
+            {
+                "id": item["id"],
+                "taskCode": item["taskCode"],
+                "name": item["taskName"],
+                "group": item["groupCode"],
+                "owner": item["responsibleRole"],
+                "deadline": item["deadline"],
+                "status": item["status"],
+                "note": item["issueDescription"],
+                "requirement": item["requirement"],
+                "nextActionType": item["nextActionType"],
+            }
+            for item in overview["pendingTasks"]
+        ]
+        base.update(
+            {
+                "summary": summary,
+                "topicData": {
+                    "overview": overview,
+                    "progress": {"summary": summary, "groups": progress_groups},
+                    "chapters": {"list": task_list},
+                    "statusChain": overview["processStages"],
+                },
+                "detailData": pending_list,
+                "dataSource": "MySQL：monthly_report_task_instance / monthly_report_task_material_link / monthly_report_task_validation",
+                "updateTime": overview["updatedAt"],
+                "completeness": f"{overview['readinessRate']}%",
+                "sourceMode": overview["sourceMode"],
+                "dataNature": overview["dataNature"],
+                "isMock": overview["isMock"],
+            }
+        )
+        return base
+
     cycle = query_one(
         """
         SELECT *
@@ -729,6 +1287,18 @@ def get_s02_safety_risk_detail() -> dict | None:
     location_count = len({row.get("location") for row in active_rows if row.get("location")})
 
     detail = with_snapshot_base("S02")
+
+    def s02_source_id(row: dict) -> str:
+        row_id = int(row.get("id") or 0)
+        if 430001 <= row_id <= 439999:
+            return f"S02-{row_id - 430000:03d}"
+        return f"S02-{row_id}"
+
+    s02_gis_feature_map = {
+        "S02-002": "section-2-1",
+        "S02-006": "slope-2-1",
+    }
+
     detail.update(
         {
             "summary": [
@@ -740,6 +1310,11 @@ def get_s02_safety_risk_detail() -> dict | None:
             ],
             "detailData": [
                 {
+                    "id": s02_source_id(row),
+                    "sourceId": s02_source_id(row),
+                    "sourceTable": "safety_risk_point",
+                    "rawId": row.get("id"),
+                    "gisFeatureId": s02_gis_feature_map.get(s02_source_id(row)),
                     "name": row.get("risk_name") or "",
                     "level": row.get("risk_level") or "",
                     "location": row.get("location") or "",
@@ -983,7 +1558,7 @@ def get_g03_rectification_detail() -> dict | None:
 
 
 def get_g04_material_gap_detail() -> dict | None:
-    rows = query_all("SELECT * FROM compliance_material_gap ORDER BY status = '逾期' DESC, deadline, id")
+    rows = query_all("SELECT * FROM compliance_material_gap WHERE status <> '已补齐' ORDER BY status = '逾期' DESC, deadline, id")
     if not rows:
         return None
     due_this_month = [
@@ -1173,6 +1748,9 @@ def get_carbon_panel_data(base: dict) -> dict:
     reduction = next((item for item in summary if item.get("label") == "累计核算减排量"), {"value": 0})
     rate = next((item for item in summary if item.get("label") == "较基准下降"), {"value": 0})
     existing = base.get("carbon") or {}
+    carbon_cost_label = topic.get("carbonCostLabel") or "低碳措施节约成本"
+    carbon_cost_value = topic.get("carbonCostValue")
+    carbon_cost_unit = topic.get("carbonCostUnit") or "万元"
     return {
         "metrics": [
             {
@@ -1188,40 +1766,46 @@ def get_carbon_panel_data(base: dict) -> dict:
                 "sub": f"预计全年 {(((topic.get('topicData') or {}).get('benefit') or {}).get('summary') or [{}, {}, {'value': 0}])[2].get('value', 0)} tCO₂e",
             },
             {
-                "label": "低碳措施成本影响",
-                "value": 0,
-                "unit": "测算口径",
-                "sub": "非财务确认结论",
+                "label": carbon_cost_label,
+                "value": carbon_cost_value,
+                "unit": carbon_cost_unit,
+                "sub": "项目初步测算，尚未正式财务确认",
             },
         ],
-        "sources": [{"name": item.get("label"), "value": item.get("value")} for item in source_detail[:3]],
+        "carbonCostLabel": carbon_cost_label,
+        "carbonCostValue": carbon_cost_value,
+        "carbonCostUnit": carbon_cost_unit,
+        # 首页右侧旧面板保留“其他”标签，专题弹窗仍使用可追溯的“施工运输”。
+        "sources": [
+            {"name": "其他" if item.get("label") == "施工运输" else item.get("label"), "value": item.get("value")}
+            for item in source_detail
+        ],
         "reductions": existing.get("reductions") or existing.get("measures") or [],
         "measures": existing.get("measures") or existing.get("reductions") or [],
     }
 
 
 def get_monthly_panel_data(base: dict) -> dict:
-    topic = get_monthly_report_topic_detail()
-    if not topic:
+    overview = get_monthly_report_overview()
+    if not overview:
         return base.get("monthly") or {}
-    summary = topic.get("summary") or []
-    progress = next((item for item in summary if item.get("label") == "月报完成度"), {"value": 0})
-    pending = next((item for item in summary if item.get("label") == "待补资料"), {"value": 0})
-    confirm = next((item for item in summary if item.get("label") == "待确认"), {"value": 0})
-    cycle = query_one("SELECT report_period FROM monthly_report_cycle ORDER BY report_period DESC, id DESC LIMIT 1")
-    period = cycle.get("report_period") if cycle else "2026-07"
+    summary = overview["summary"]
+    period = overview["reportMonth"]
+    active_node = next((item for item in overview["processStages"] if item.get("status") == "IN_PROGRESS"), None)
     return {
         "month": f"{period[:4]}年{int(period[5:7])}月" if period and len(period) >= 7 else period,
-        "progress": progress.get("value"),
-        "pendingCount": pending.get("value"),
-        "confirmCount": confirm.get("value"),
+        "progress": overview["readinessRate"],
+        "pendingCount": summary["pendingTotal"],
+        "confirmCount": summary["pendingConfirmCount"],
+        "currentStatus": active_node.get("label") if active_node else "报告编制",
+        "expectedCompletion": None,
         "materials": [
             {
-                "name": item.get("name"),
-                "owner": item.get("owner"),
+                "name": item.get("taskName"),
+                "owner": item.get("responsibleRole"),
                 "deadline": item.get("deadline"),
             }
-            for item in (topic.get("detailData") or [])
+            for item in overview["pendingTasks"]
         ],
     }
 
@@ -1236,47 +1820,148 @@ def get_dashboard_panels() -> dict | None:
     return base
 
 
+def ensure_s01_business_tables() -> None:
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS safety_incident_record (
+          id BIGINT PRIMARY KEY,
+          document_id BIGINT NULL,
+          incident_date DATE NOT NULL,
+          incident_name VARCHAR(255) NULL,
+          incident_type VARCHAR(100) NULL,
+          incident_level VARCHAR(50) NULL,
+          interrupt_counting TINYINT NOT NULL DEFAULT 1,
+          responsible_department VARCHAR(100) NULL,
+          handling_status VARCHAR(50) NULL,
+          interrupt_reason VARCHAR(255) NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_safety_incident_date(incident_date),
+          INDEX idx_safety_incident_interrupt(interrupt_counting)
+        ) ENGINE=InnoDB COMMENT='安全生产事故台账'
+        """
+    )
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS construction_stage_record (
+          id BIGINT PRIMARY KEY,
+          stage_key VARCHAR(50) NOT NULL,
+          stage_name VARCHAR(100) NOT NULL,
+          stage_status VARCHAR(30) NOT NULL,
+          stage_detail VARCHAR(255) NULL,
+          sequence_no INT NOT NULL,
+          start_date DATE NULL,
+          end_date DATE NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uk_construction_stage_key(stage_key)
+        ) ENGINE=InnoDB COMMENT='项目工期主阶段'
+        """
+    )
+    stages = [
+        (1, "preparation", "施工准备", "completed", None, 1, "2025-07-10", "2025-10-31"),
+        (2, "main-construction", "主体工程施工", "current", "路基｜桥梁｜隧道并行施工", 2, "2025-11-01", None),
+        (3, "pavement", "路面及附属工程", "not_started", None, 3, None, None),
+        (4, "handover", "交工验收", "not_started", None, 4, None, None),
+    ]
+    for stage in stages:
+        execute(
+            """
+            INSERT INTO construction_stage_record
+            (id, stage_key, stage_name, stage_status, stage_detail, sequence_no, start_date, end_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              stage_name = VALUES(stage_name),
+              stage_status = VALUES(stage_status),
+              stage_detail = VALUES(stage_detail),
+              sequence_no = VALUES(sequence_no),
+              start_date = VALUES(start_date),
+              end_date = VALUES(end_date)
+            """,
+            stage,
+        )
+
+
+def month_ticks(start_date: date, end_date: date) -> list[str]:
+    ticks: list[str] = []
+    year = start_date.year
+    month = start_date.month
+    while year < end_date.year or (year == end_date.year and month <= end_date.month):
+        ticks.append(f"{year}-{month:02d}")
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return ticks
+
+
 def get_s01_detail() -> dict:
+    ensure_s01_business_tables()
     row = query_one("SELECT * FROM safety_production_record ORDER BY update_time DESC LIMIT 1")
     if row is None:
         return {}
+    project_start_date = row["project_start_date"]
+    current_date = row["current_date"]
+    latest_interrupt = query_one(
+        """
+        SELECT *
+        FROM safety_incident_record
+        WHERE interrupt_counting = 1
+          AND incident_date <= %s
+        ORDER BY incident_date DESC, id DESC
+        LIMIT 1
+        """,
+        (current_date,),
+    )
+    latest_interrupt_date = latest_interrupt.get("incident_date") if latest_interrupt else None
+    continuous_days = (current_date - (latest_interrupt_date or project_start_date)).days
+    counting_status = "interrupted" if latest_interrupt else "continuous"
+    stages = query_all(
+        """
+        SELECT *
+        FROM construction_stage_record
+        ORDER BY sequence_no, id
+        """
+    )
+    current_stage = next((stage for stage in stages if stage["stage_status"] == "current"), None)
+    current_stage_name = current_stage["stage_name"] if current_stage else row["current_stage"]
+    current_stage_detail = current_stage["stage_detail"] if current_stage and current_stage.get("stage_detail") else row["current_stage_detail"]
+    if latest_interrupt:
+        interrupt_reason = latest_interrupt.get("interrupt_reason") or latest_interrupt.get("incident_name") or "安全生产事故"
+        timeline_message = "最近一次中断后重新累计"
+        conclusion = f"项目开工以来，曾发生导致连续安全生产记录中断的事故，当前为事故后新一轮连续安全生产{continuous_days}天。"
+    else:
+        interrupt_reason = None
+        timeline_message = "本轮连续周期内无事故中断"
+        conclusion = f"项目开工以来，未发生导致连续安全生产记录中断的事故，当前已连续安全生产{continuous_days}天。"
     return {
-        "projectStartDate": value_for_json(row["project_start_date"]),
-        "currentDate": value_for_json(row["current_date"]),
-        "continuousDays": row["continuous_days"],
-        "currentStage": row["current_stage"],
-        "currentStageDetail": row["current_stage_detail"],
-        "countingStatus": row["counting_status"],
+        "projectStartDate": value_for_json(project_start_date),
+        "currentDate": value_for_json(current_date),
+        "continuousDays": continuous_days,
+        "currentStage": current_stage_name,
+        "currentStageDetail": current_stage_detail,
+        "countingStatus": counting_status,
+        "latestInterruptDate": value_for_json(latest_interrupt_date) if latest_interrupt_date else None,
+        "latestInterruptReason": interrupt_reason,
         "updateTime": value_for_json(row["update_time"])[:16],
         "timeline": {
             "startLabel": "开工日期",
-            "startDate": value_for_json(row["project_start_date"]),
-            "message": "本轮连续周期内无事故中断",
+            "startDate": value_for_json(project_start_date),
+            "message": timeline_message,
             "endLabel": "当前",
-            "endDate": value_for_json(row["current_date"]),
-            "months": [
-                "2025-07",
-                "2025-08",
-                "2025-09",
-                "2025-10",
-                "2025-11",
-                "2025-12",
-                "2026-01",
-                "2026-02",
-                "2026-03",
-                "2026-04",
-                "2026-05",
-                "2026-06",
-                "2026-07",
-            ],
+            "endDate": value_for_json(current_date),
+            "months": month_ticks(project_start_date, current_date),
         },
         "constructionStages": [
-            {"id": "preparation", "name": "施工准备", "status": "completed"},
-            {"id": "main-construction", "name": "主体工程施工", "status": "current", "detail": row["current_stage_detail"]},
-            {"id": "pavement", "name": "路面及附属工程", "status": "not_started"},
-            {"id": "handover", "name": "交工验收", "status": "not_started"},
+            {
+                "id": stage["stage_key"],
+                "name": stage["stage_name"],
+                "status": stage["stage_status"],
+                "detail": stage.get("stage_detail"),
+                "startDate": value_for_json(stage.get("start_date")),
+                "endDate": value_for_json(stage.get("end_date")),
+            }
+            for stage in stages
         ],
-        "conclusion": f"项目开工以来，未发生导致连续安全生产记录中断的事故，当前已连续安全生产{row['continuous_days']}天。",
+        "conclusion": conclusion,
     }
 
 
@@ -2435,14 +3120,28 @@ def start_parse_job(file_id: int) -> dict:
 
 
 def infer_document_type(name: str) -> str:
+    if "环境监测" in name or "监测报告" in name or "扬尘监测" in name or "噪声监测" in name:
+        return "环境监测报告"
     if "碳" in name:
         return "碳排放活动数据表"
+    if "环保" in name or "环境问题" in name or "扬尘" in name or "噪声" in name:
+        return "环保问题整改资料"
     if "高风险" in name:
         return "高风险作业审批资料"
+    if "安全事故" in name or "事故台账" in name or "事故记录" in name or "中断事故" in name:
+        return "安全事故台账"
+    if "劳务纠纷" in name or "纠纷台账" in name or "欠薪" in name or "劳务" in name:
+        return "劳务纠纷台账"
+    if "群众诉求" in name or "诉求台账" in name or "投诉" in name or "信访" in name:
+        return "群众诉求台账"
     if "工资" in name:
         return "工资支付资料"
     if "临时用地" in name:
         return "临时用地合规资料"
+    if "合规资料" in name or "待补齐" in name or "缺口" in name or "合规性评价" in name:
+        return "合规资料补齐材料"
+    if "报批报建" in name or "报建" in name or "报批" in name or "手续" in name or "审批" in name:
+        return "报批报建资料"
     if "NCR" in name or "整改" in name:
         return "NCR整改关闭资料"
     if "水保" in name:
@@ -2453,7 +3152,7 @@ def infer_document_type(name: str) -> str:
 
 
 def infer_module(document_type: str) -> str:
-    if document_type in {"高风险作业审批资料", "工资支付资料", "安全教育培训记录"}:
+    if document_type in {"高风险作业审批资料", "工资支付资料", "安全教育培训记录", "安全事故台账", "劳务纠纷台账", "群众诉求台账"}:
         return "S"
     if document_type in {"临时用地合规资料", "NCR整改关闭资料"}:
         return "G"
@@ -2551,7 +3250,7 @@ def _business_domain(module: str, document_type: str, document_name: str) -> str
     if module == "G":
         return "GOVERNANCE"
     if module == "S":
-        if _text_contains_any(text, ["工资", "宸ヨ祫", "劳务", "纠纷"]):
+        if _text_contains_any(text, ["工资", "宸ヨ祫", "劳务", "纠纷", "群众", "诉求", "投诉", "信访"]):
             return "SOCIAL"
         return "SAFETY"
     return "ENVIRONMENT"
@@ -2559,14 +3258,28 @@ def _business_domain(module: str, document_type: str, document_name: str) -> str
 
 def _target_table_for_document(document_type: str, document_name: str) -> str:
     text = f"{document_type} {document_name}"
+    if _text_contains_any(text, ["环境监测", "监测报告", "扬尘监测", "噪声监测"]):
+        return "env_monitoring_record"
+    if _text_contains_any(text, ["环保问题", "环境问题", "扬尘", "噪声"]):
+        return "env_issue_record"
+    if _text_contains_any(text, ["高风险", "楂橀", "作业审批"]):
+        return "safety_risk_point"
+    if _text_contains_any(text, ["安全事故", "事故台账", "事故记录", "中断事故"]):
+        return "safety_incident_record"
+    if _text_contains_any(text, ["劳务纠纷", "纠纷台账", "欠薪", "劳务争议"]):
+        return "labor_dispute_record"
+    if _text_contains_any(text, ["群众诉求", "诉求台账", "投诉", "信访", "来访"]):
+        return "appeal_record"
     if _text_contains_any(text, ["NCR", "整改", "鏁存敼"]):
         return "rectification_record"
     if _text_contains_any(text, ["临时用地", "涓存椂鐢ㄥ湴", "许可", "许可证"]):
         return "permit_record"
+    if _text_contains_any(text, ["合规资料", "待补齐", "缺口", "合规性评价"]):
+        return "compliance_material_gap"
+    if _text_contains_any(text, ["报批报建", "报建", "报批", "手续", "审批"]):
+        return "compliance_procedure"
     if _text_contains_any(text, ["工资", "宸ヨ祫"]):
         return "salary_payment_record"
-    if _text_contains_any(text, ["高风险", "楂橀", "作业审批"]):
-        return "safety_risk_point"
     if _text_contains_any(text, ["碳", "纰"]):
         return "carbon_emission_activity"
     if _text_contains_any(text, ["水保", "姘翠繚"]):
@@ -2694,8 +3407,41 @@ def _sync_confirmed_document_to_business_table(
     }
 
     synced_records: list[dict] = []
+    operation_type = "INSERT"
 
-    if target_table == "water_protection_issue":
+    if target_table == "env_monitoring_record":
+        target_id = next_id("env_monitoring_record", 410100)
+        monitor_type = field_value("monitor_type", "扬尘")
+        dust_count = int(_parse_decimal(field_value("dust_exceed_count", "1" if monitor_type == "扬尘" else "0"), 0))
+        noise_count = int(_parse_decimal(field_value("noise_exceed_count", "1" if monitor_type == "噪声" else "0"), 0))
+        exceed_count = max(1, dust_count + noise_count)
+        execute(
+            """
+            INSERT INTO env_monitoring_record
+            (id, document_id, monitor_date, monitor_type, exceed_count, dust_exceed_count,
+             noise_exceed_count, module_code, monitor_point, factor_name, detected_value,
+             initial_detected_value, recheck_detected_value, limit_value, exceed_multiple, recheck_status)
+            VALUES (%s, %s, '2026-07-13', %s, %s, %s, %s, 'E', %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                target_id,
+                document_id,
+                monitor_type,
+                exceed_count,
+                dust_count,
+                noise_count,
+                field_value("monitor_point", "K18+500 弃渣场监测点"),
+                field_value("factor_name", "扬尘/PM10" if monitor_type == "扬尘" else "噪声/昼间等效声级"),
+                field_value("detected_value", "186 μg/m³" if monitor_type == "扬尘" else "72 dB(A)"),
+                field_value("initial_detected_value", field_value("detected_value", "186 μg/m³" if monitor_type == "扬尘" else "72 dB(A)")),
+                field_value("recheck_detected_value", None),
+                field_value("limit_value", "150 μg/m³" if monitor_type == "扬尘" else "70 dB(A)"),
+                _parse_decimal(field_value("exceed_multiple", "1.24"), 1.24),
+                field_value("recheck_status", "待复测"),
+            ),
+        )
+        check_message = "已根据环境监测资料生成超标监测记录。"
+    elif target_table == "water_protection_issue":
         target_id = next_id("water_protection_issue", 710100)
         issue_count = int(_parse_decimal(field_value("water_protection_issue_count", "1"), 1))
         execute(
@@ -2708,6 +3454,26 @@ def _sync_confirmed_document_to_business_table(
         )
         trace_payload["extractedIssueCount"] = issue_count
         check_message = f"已根据水保资料生成未闭环问题样例，抽取问题数 {issue_count} 项。"
+    elif target_table == "env_issue_record":
+        target_id = next_id("env_issue_record", 420100)
+        execute(
+            """
+            INSERT INTO env_issue_record
+            (id, document_id, issue_type, issue_count, issue_status, overdue,
+             found_date, closed_date, issue_name, issue_level, responsible_department, deadline, duration_days)
+            VALUES (%s, %s, %s, 1, %s, 0, '2026-07-13', NULL, %s, %s, %s, '2026-08-10', 0)
+            """,
+            (
+                target_id,
+                document_id,
+                field_value("issue_type", "环保问题"),
+                field_value("issue_status", "整改中"),
+                field_value("issue_name", document_name),
+                field_value("issue_level", "一般"),
+                field_value("responsible_department", "安全环保部"),
+            ),
+        )
+        check_message = "已根据环保问题资料生成未闭环环保问题记录。"
     elif target_table == "carbon_emission_activity":
         target_id = next_id("carbon_emission_activity", 720100)
         execute(
@@ -2756,6 +3522,78 @@ def _sync_confirmed_document_to_business_table(
             ),
         )
         check_message = "已根据高风险作业资料生成安全风险点管控记录。"
+    elif target_table == "safety_incident_record":
+        ensure_s01_business_tables()
+        target_id = next_id("safety_incident_record", 530100)
+        execute(
+            """
+            INSERT INTO safety_incident_record
+            (id, document_id, incident_date, incident_name, incident_type, incident_level,
+             interrupt_counting, responsible_department, handling_status, interrupt_reason)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                target_id,
+                document_id,
+                field_value("incident_date", "2026-07-01"),
+                field_value("incident_name", document_name),
+                field_value("incident_type", "安全生产事故"),
+                field_value("incident_level", "一般"),
+                0 if field_value("interrupt_counting", "1") in {"0", "否", "不计入"} else 1,
+                field_value("responsible_department", "安全环保部"),
+                field_value("handling_status", "已记录"),
+                field_value("interrupt_reason", "触发连续安全生产记录中断条件"),
+            ),
+        )
+        check_message = "已根据安全事故台账生成连续安全生产中断记录。"
+    elif target_table == "labor_dispute_record":
+        target_id = next_id("labor_dispute_record", 510100)
+        execute(
+            """
+            INSERT INTO labor_dispute_record
+            (id, document_id, dispute_type, status, involved_people, overdue, created_at,
+             dispute_name, occurred_date, amount_wan, responsible_department, closed_date)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NULL)
+            """,
+            (
+                target_id,
+                document_id,
+                field_value("dispute_type", "工资支付"),
+                field_value("dispute_status", "协调中"),
+                int(_parse_decimal(field_value("involved_people", "5"), 5)),
+                1 if field_value("overdue", "0") in {"1", "是", "逾期"} else 0,
+                field_value("dispute_name", document_name),
+                field_value("occurred_date", "2026-07-13"),
+                _parse_decimal(field_value("amount_wan", "12"), 12),
+                field_value("responsible_department", "财务管理部"),
+            ),
+        )
+        check_message = "已根据劳务纠纷资料生成未办结劳务纠纷记录。"
+    elif target_table == "appeal_record":
+        target_id = next_id("appeal_record", 520100)
+        overdue_flag = 1 if field_value("overdue", "0") in {"1", "是", "逾期"} else 0
+        execute(
+            """
+            INSERT INTO appeal_record
+            (id, document_id, appeal_type, status, source_channel, overdue, created_at,
+             appeal_content, accepted_date, location, deadline, closed_date, duration_days)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, NULL, %s)
+            """,
+            (
+                target_id,
+                document_id,
+                field_value("appeal_type", "群众诉求"),
+                field_value("appeal_status", "办理中" if not overdue_flag else "逾期"),
+                field_value("source_channel", "现场来访"),
+                overdue_flag,
+                field_value("appeal_content", document_name),
+                field_value("accepted_date", "2026-07-13"),
+                field_value("location", "K18+500 弃渣场"),
+                field_value("deadline", "2026-07-20"),
+                int(_parse_decimal(field_value("duration_days", "7"), 7)),
+            ),
+        )
+        check_message = "已根据群众诉求资料生成未办结群众诉求记录。"
     elif target_table == "salary_payment_record":
         target_id = next_id("salary_payment_record", 740100)
         execute(
@@ -2797,6 +3635,59 @@ def _sync_confirmed_document_to_business_table(
             ),
         )
         check_message = "已根据许可资料生成许可台账记录。"
+    elif target_table == "compliance_procedure":
+        target_id = next_id("compliance_procedure", 310100)
+        execute(
+            """
+            INSERT INTO compliance_procedure
+            (id, document_id, procedure_name, status, impact_node, overdue, procedure_type,
+             deadline, responsible_department, progress_percent, completed_date, expected_complete_date)
+            VALUES (%s, %s, %s, %s, %s, 0, %s, '2026-08-10', %s, %s, NULL, '2026-07-31')
+            """,
+            (
+                target_id,
+                document_id,
+                field_value("procedure_name", document_name),
+                field_value("procedure_status", "待批复"),
+                field_value("impact_node", "报批报建"),
+                field_value("procedure_type", "行政许可"),
+                field_value("responsible_department", "工程管理部"),
+                int(_parse_decimal(field_value("progress_percent", "50"), 50)),
+            ),
+        )
+        check_message = "已根据报批报建资料生成未完成合规手续记录。"
+    elif target_table == "compliance_material_gap":
+        gap = query_one(
+            """
+            SELECT *
+            FROM compliance_material_gap
+            WHERE status <> '已补齐'
+            ORDER BY status = '逾期' DESC, deadline, id
+            LIMIT 1
+            """
+        )
+        if gap is None:
+            target_id = next_id("compliance_material_gap", 340100)
+            execute(
+                """
+                INSERT INTO compliance_material_gap
+                (id, task_id, material_name, status, responsible_unit, module_code, deadline, action_text)
+                VALUES (%s, NULL, %s, '已补齐', %s, 'G', '2026-07-25', '已补齐')
+                """,
+                (target_id, field_value("material_name", document_name), responsible_unit),
+            )
+        else:
+            target_id = int(gap["id"])
+            execute(
+                """
+                UPDATE compliance_material_gap
+                SET status = '已补齐', action_text = '已补齐'
+                WHERE id = %s
+                """,
+                (target_id,),
+            )
+        operation_type = "UPDATE"
+        check_message = "已根据合规资料上传结果更新合规资料缺口状态。"
     elif target_table == "rectification_record":
         target_id = next_id("rectification_record", 760100)
         status = field_value("rectification_status", "待复查")
@@ -2831,10 +3722,10 @@ def _sync_confirmed_document_to_business_table(
         file_id=file_id,
         target_table=target_table,
         target_record_id=target_id,
-        operation_type="INSERT",
+        operation_type=operation_type,
         trace_payload=trace_payload,
     )
-    synced_records.append({"targetTable": target_table, "targetRecordId": target_id, "operationType": "INSERT"})
+    synced_records.append({"targetTable": target_table, "targetRecordId": target_id, "operationType": operation_type})
     return {
         "ingestionJobId": ingestion_job_id,
         "sourceRecordKey": source_record_key,
@@ -3174,6 +4065,124 @@ def get_gis_layers(
     }
 
 
+GIS_RELATION_TYPE_LABELS = {
+    "environment_problem": "环保问题",
+    "safety_risk": "安全风险",
+    "inspection_record": "巡查记录",
+    "compliance_document": "合规资料",
+    "monthly_report": "月报资料",
+}
+
+GIS_RELATION_TARGETS = {
+    "environment_problem": {
+        "kpiCode": "E02",
+        "module": "环境环保",
+        "moduleGroup": "E",
+        "actionLabel": "查看环保问题来源",
+    },
+    "safety_risk": {
+        "kpiCode": "S02",
+        "module": "社会责任",
+        "moduleGroup": "S",
+        "actionLabel": "查看安全风险来源",
+    },
+    "inspection_record": {
+        "kpiCode": None,
+        "module": "项目现场一张图",
+        "moduleGroup": "GIS",
+        "actionLabel": "查看巡查来源",
+    },
+    "compliance_document": {
+        "kpiCode": "G04",
+        "module": "治理合规",
+        "moduleGroup": "G",
+        "actionLabel": "查看合规资料来源",
+    },
+    "monthly_report": {
+        "kpiCode": None,
+        "module": "月报管理",
+        "moduleGroup": "REPORT",
+        "actionLabel": "查看月报资料来源",
+    },
+}
+
+GIS_RELATION_PENDING_STATUSES = {
+    "整改中",
+    "待复查",
+    "待销项",
+    "持续管控",
+    "关注",
+    "逾期",
+}
+
+
+def gis_relation_items(rows: list[dict]) -> list[dict]:
+    return [
+        {
+            "type": item["relation_type"],
+            "typeLabel": GIS_RELATION_TYPE_LABELS.get(item["relation_type"], item["relation_type"]),
+            "code": item["relation_code"],
+            "name": item["relation_name"],
+            "status": item["relation_status"],
+            "riskLevel": item["risk_level"],
+            "sourceTable": item["source_table"],
+            "sourceId": item["source_id"],
+            "summary": item["summary"],
+            "updatedAt": value_for_json(item["updated_at"]),
+        }
+        for item in rows
+    ]
+
+
+def gis_relation_summary(rows: list[dict]) -> dict:
+    by_type: dict[str, dict] = {}
+    pending_count = 0
+    high_risk_count = 0
+    for item in rows:
+        relation_type = item["relation_type"]
+        bucket = by_type.setdefault(
+            relation_type,
+            {
+                "type": relation_type,
+                "typeLabel": GIS_RELATION_TYPE_LABELS.get(relation_type, relation_type),
+                "count": 0,
+            },
+        )
+        bucket["count"] += 1
+        status = str(item.get("relation_status") or "")
+        if status in GIS_RELATION_PENDING_STATUSES or "逾期" in status:
+            pending_count += 1
+        risk_level = item.get("risk_level")
+        if risk_level is not None and int(risk_level) >= 3:
+            high_risk_count += 1
+    return {
+        "total": len(rows),
+        "pendingCount": pending_count,
+        "highRiskCount": high_risk_count,
+        "byType": list(by_type.values()),
+    }
+
+
+def get_gis_relation_rows(project_id: str, feature_ids: list[str]) -> dict[str, list[dict]]:
+    if not feature_ids:
+        return {}
+    placeholders = ", ".join(["%s"] * len(feature_ids))
+    rows = query_all(
+        f"""
+        SELECT feature_id, relation_type, relation_code, relation_name, relation_status,
+               risk_level, source_table, source_id, summary, updated_at
+        FROM gis_feature_business_relation
+        WHERE project_id = %s AND feature_id IN ({placeholders})
+        ORDER BY risk_level DESC, id
+        """,
+        tuple([project_id, *feature_ids]),
+    )
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row["feature_id"], []).append(row)
+    return grouped
+
+
 def get_gis_features(
     project_id: str = "LUOYI-ESG",
     layer_id: str | None = None,
@@ -3191,14 +4200,25 @@ def get_gis_features(
 
     rows = query_all(
         f"""
-        SELECT id, layer_id, object_type, name, geometry_json, properties_json,
-               status, risk_level, updated_at
-        FROM gis_feature
-        WHERE {" AND ".join(where)}
-        ORDER BY layer_id, id
+        SELECT f.id, f.layer_id, f.object_type, f.name, f.geometry_json, f.properties_json,
+               f.status, f.risk_level, f.updated_at,
+               s.status_code AS business_status_code,
+               s.status_label AS business_status_label,
+               s.dashboard_title,
+               s.dashboard_summary_json,
+               s.dashboard_note,
+               s.preview_detail_json,
+               s.target_module,
+               s.target_route
+        FROM gis_feature f
+        LEFT JOIN gis_feature_business_summary s
+          ON s.feature_id = f.id AND s.project_id = f.project_id
+        WHERE {" AND ".join([item.replace("project_id", "f.project_id").replace("layer_id", "f.layer_id").replace("section_id", "f.section_id") for item in where])}
+        ORDER BY f.layer_id, f.id
         """,
         tuple(params),
     )
+    relations_by_feature = get_gis_relation_rows(project_id, [row["id"] for row in rows])
     return {
         "code": 0,
         "data": [
@@ -3210,7 +4230,21 @@ def get_gis_features(
                 "geometry": json_value(row["geometry_json"], {}),
                 "properties": json_value(row["properties_json"], {}),
                 "status": row["status"],
+                "statusLabel": row.get("business_status_label"),
                 "riskLevel": row["risk_level"],
+                "businessSummary": {
+                    "statusCode": row.get("business_status_code"),
+                    "statusLabel": row.get("business_status_label"),
+                    "title": row.get("dashboard_title"),
+                    "dashboardRows": json_value(row.get("dashboard_summary_json"), []),
+                    "dashboardNote": row.get("dashboard_note"),
+                    "previewRows": json_value(row.get("preview_detail_json"), []),
+                    "targetModule": row.get("target_module"),
+                    "targetRoute": row.get("target_route"),
+                }
+                if row.get("dashboard_summary_json") is not None
+                else None,
+                "relationSummary": gis_relation_summary(relations_by_feature.get(row["id"], [])),
                 "updatedAt": value_for_json(row["updated_at"]),
             }
             for row in rows
@@ -3221,5 +4255,159 @@ def get_gis_features(
             "sectionId": section_id,
             "currentTime": current_time,
             "total": len(rows),
+        },
+    }
+
+
+def get_gis_feature_detail(
+    feature_id: str,
+    project_id: str = "LUOYI-ESG",
+) -> dict:
+    row = query_one(
+        """
+        SELECT f.id, f.layer_id, f.object_type, f.name, f.status, f.risk_level, f.updated_at,
+               s.status_code AS business_status_code,
+               s.status_label AS business_status_label,
+               s.dashboard_title,
+               s.dashboard_summary_json,
+               s.dashboard_note,
+               s.preview_detail_json,
+               s.target_module,
+               s.target_route
+        FROM gis_feature f
+        LEFT JOIN gis_feature_business_summary s
+          ON s.feature_id = f.id AND s.project_id = f.project_id
+        WHERE f.id = %s AND f.project_id = %s
+        """,
+        (feature_id, project_id),
+    )
+    if row is None:
+        return {"code": 404, "message": "GIS feature not found", "data": None}
+
+    relation_rows = get_gis_relation_rows(project_id, [feature_id]).get(feature_id, [])
+    return {
+        "code": 0,
+        "data": {
+            "id": row["id"],
+            "layerId": row["layer_id"],
+            "objectType": row["object_type"],
+            "name": row["name"],
+            "status": row["status"],
+            "statusLabel": row.get("business_status_label"),
+            "riskLevel": row["risk_level"],
+            "businessSummary": {
+                "statusCode": row.get("business_status_code"),
+                "statusLabel": row.get("business_status_label"),
+                "title": row.get("dashboard_title"),
+                "dashboardRows": json_value(row.get("dashboard_summary_json"), []),
+                "dashboardNote": row.get("dashboard_note"),
+                "previewRows": json_value(row.get("preview_detail_json"), []),
+                "targetModule": row.get("target_module"),
+                "targetRoute": row.get("target_route"),
+            }
+            if row.get("dashboard_summary_json") is not None
+            else None,
+            "relationSummary": gis_relation_summary(relation_rows),
+            "relations": gis_relation_items(relation_rows),
+            "updatedAt": value_for_json(row["updated_at"]),
+        },
+    }
+
+
+def get_gis_feature_relations(
+    feature_id: str,
+    project_id: str = "LUOYI-ESG",
+) -> dict:
+    feature = query_one(
+        """
+        SELECT id, name, object_type
+        FROM gis_feature
+        WHERE id = %s AND project_id = %s
+        """,
+        (feature_id, project_id),
+    )
+    if feature is None:
+        return {"code": 404, "message": "GIS feature not found", "data": None}
+    relation_rows = get_gis_relation_rows(project_id, [feature_id]).get(feature_id, [])
+    return {
+        "code": 0,
+        "data": {
+            "featureId": feature_id,
+            "featureName": feature["name"],
+            "objectType": feature["object_type"],
+            "summary": gis_relation_summary(relation_rows),
+            "items": gis_relation_items(relation_rows),
+        },
+        "meta": {
+            "projectId": project_id,
+            "total": len(relation_rows),
+        },
+    }
+
+
+def get_gis_feature_business_links(
+    feature_id: str,
+    project_id: str = "LUOYI-ESG",
+) -> dict:
+    feature = query_one(
+        """
+        SELECT f.id, f.name, f.object_type,
+               s.status_label, s.dashboard_title
+        FROM gis_feature f
+        LEFT JOIN gis_feature_business_summary s
+          ON s.feature_id = f.id AND s.project_id = f.project_id
+        WHERE f.id = %s AND f.project_id = %s
+        """,
+        (feature_id, project_id),
+    )
+    if feature is None:
+        return {"code": 404, "message": "GIS feature not found", "data": None}
+
+    relation_rows = get_gis_relation_rows(project_id, [feature_id]).get(feature_id, [])
+    items = []
+    for item in gis_relation_items(relation_rows):
+        target = GIS_RELATION_TARGETS.get(item["type"], {})
+        items.append(
+            {
+                "id": f"{feature_id}:{item.get('type')}:{item.get('code') or item.get('sourceId') or item.get('name')}",
+                "type": item["type"],
+                "typeLabel": item.get("typeLabel"),
+                "code": item.get("code"),
+                "title": item.get("name"),
+                "status": item.get("status"),
+                "riskLevel": item.get("riskLevel"),
+                "summary": item.get("summary"),
+                "sourceTable": item.get("sourceTable"),
+                "sourceId": item.get("sourceId"),
+                "targetKpiCode": target.get("kpiCode"),
+                "targetModule": target.get("module"),
+                "targetModuleGroup": target.get("moduleGroup"),
+                "actionLabel": target.get("actionLabel", "查看来源"),
+                "actionEnabled": False,
+                "actionTip": "关联业务跳转为原型预留，尚未接入页面联动。",
+                "updatedAt": item.get("updatedAt"),
+            }
+        )
+
+    return {
+        "code": 0,
+        "data": {
+            "featureId": feature_id,
+            "featureName": feature["name"],
+            "objectType": feature["object_type"],
+            "statusLabel": feature.get("status_label"),
+            "title": feature.get("dashboard_title") or "关联业务",
+            "summary": gis_relation_summary(relation_rows),
+            "items": items,
+            "permissions": {
+                "canView": True,
+                "canSupervise": False,
+                "canHandle": False,
+                "notice": "领导层仅查看关联业务线索，不在地图侧办理事项。",
+            },
+        },
+        "meta": {
+            "projectId": project_id,
+            "total": len(items),
         },
     }

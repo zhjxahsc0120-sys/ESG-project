@@ -1,10 +1,27 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { Upload, FolderOpen, Link2, FileText, FileImage, FileSpreadsheet, AlertTriangle } from 'lucide-vue-next'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import {
+  Upload,
+  FolderOpen,
+  Link2,
+  FileText,
+  FileImage,
+  FileSpreadsheet,
+  AlertTriangle,
+  Search,
+  RefreshCw,
+  Trash2,
+  XCircle,
+  Copy,
+  Eye,
+  Sparkles,
+  Layers,
+} from 'lucide-vue-next'
 import {
   parseQueue as mockParseQueue,
   aiParseResult as mockAiParseResult,
   suggestedTasks as mockSuggestedTasks,
+  documents as mockDocuments,
 } from '@/data/workspace.mock'
 import {
   getParseQueue,
@@ -15,7 +32,7 @@ import {
   getMatchCandidates,
   confirmParseJob,
 } from '@/services/api'
-import type { ParseQueueItem, AiParseResult, SuggestedTask } from '@/types/workspace'
+import type { ParseQueueItem, AiParseResult, SuggestedTask, Document, DuplicateFileInfo } from '@/types/workspace'
 import type { ParseFieldItem, MatchCandidateItem, ParseJobDetail } from '@/services/api'
 import { emitWorkspaceRefresh, onWorkspaceRefresh } from '@/utils/workspaceRefresh'
 
@@ -31,6 +48,26 @@ const currentJobId = ref<number | null>(null)
 const currentJob = ref<ParseJobDetail | null>(null)
 const pageMessage = ref('')
 const pageMessageType = ref<'success' | 'error' | 'info'>('info')
+
+const statusFilter = ref<string>('全部')
+const searchKeyword = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+const selectedQueueItems = ref<string[]>([])
+const showDuplicateModal = ref(false)
+const currentDuplicateFile = ref<DuplicateFileInfo | null>(null)
+const editingField = ref<string | null>(null)
+const editFieldValue = ref('')
+
+const statusOptions = ['全部', '解析中', '待确认', '疑似重复', '解析失败', '已入库']
+
+const steps = [
+  { num: '1', label: '上传资料' },
+  { num: '2', label: 'AI解析' },
+  { num: '3', label: '人工确认' },
+  { num: '4', label: '入库并关联' },
+]
+const currentStep = ref(1)
 
 function showMessage(message: string, type: 'success' | 'error' | 'info' = 'info') {
   pageMessage.value = message
@@ -86,7 +123,14 @@ function updateAiResultFromFields(fields: ParseFieldItem[]) {
     module,
     moduleName: module === 'E' ? '环境环保' : module === 'S' ? '社会责任' : module === 'G' ? '治理合规' : aiParseResult.value.moduleName,
     responsibilityUnit: map['responsibility_unit'] || aiParseResult.value.responsibilityUnit,
+    projectSection: map['project_section'] || aiParseResult.value.projectSection,
+    engineeringObject: map['engineering_object'] || aiParseResult.value.engineeringObject,
     validPeriod: aiParseResult.value.validPeriod,
+    suggestedTask: aiParseResult.value.suggestedTask,
+    suggestedKpiCode: aiParseResult.value.suggestedKpiCode,
+    suggestedKpiName: aiParseResult.value.suggestedKpiName,
+    suggestedReport: aiParseResult.value.suggestedReport,
+    confidence: aiParseResult.value.confidence,
     duplicateCount: aiParseResult.value.duplicateCount,
     duplicateTip: aiParseResult.value.duplicateTip,
   }
@@ -102,6 +146,7 @@ function updateCandidatesFromApi(candidates: MatchCandidateItem[], fileName: str
     matchRate: c.matchScore,
     reuseCount: c.reuseCount,
     confirmStatus: c.candidateStatus === 'PENDING' ? '待确认' : c.candidateStatus === 'ACCEPTED' ? '已关联' : c.candidateStatus,
+    matchBasis: c.matchReason,
   }))
   if (candidates.length > 0) {
     const best = candidates.reduce((a, b) => (a.matchScore > b.matchScore ? a : b))
@@ -133,6 +178,7 @@ async function handleFileChange(event: Event) {
     if (parseRes) {
       currentJobId.value = parseRes.jobId
       showMessage(`解析任务已创建。JobID：${parseRes.jobId}`, 'success')
+      currentStep.value = 2
       await loadData()
       await loadJobDetails(parseRes.jobId)
     }
@@ -164,7 +210,7 @@ function handleCancel() {
 }
 
 function handleSaveToCenter() {
-  showMessage('保存到资料中心为原型预留操作；如需真实入库，请使用“确认入库并关联”。', 'info')
+  showMessage('保存到资料中心为原型预留操作；如需真实入库，请使用"确认入库并关联"。', 'info')
 }
 
 async function handleConfirmAndLink() {
@@ -193,6 +239,7 @@ async function handleConfirmAndLink() {
       }).join('；')
       : '未关联任务'
     showMessage(`资料已入库并关联 ${res.linkedTaskCount} 个任务。DocumentID：${res.documentId}。${linkedSummary}`, 'success')
+    currentStep.value = 4
     await loadData()
     emitWorkspaceRefresh({
       source: 'smart-upload',
@@ -213,8 +260,18 @@ function handleViewParseDetail() {
   loadJobDetails(currentJobId.value)
 }
 
-function handleViewDuplicateDetail() {
-  showMessage('重复检测为原型展示；当前未接入真实文件哈希比对能力。', 'info')
+function handleViewDuplicateDetail(item: ParseQueueItem) {
+  currentDuplicateFile.value = {
+    id: item.id,
+    fileName: item.fileName,
+    fileHash: item.fileHash || 'SHA256: a1b2c3d4e5f6...',
+    fileSize: item.size,
+    cycle: aiParseResult.value.cycle,
+    uploadTime: item.uploadTime || '2026-08-10 16:20',
+    relatedTasks: ['2026年7月水保监测月报', '临时用地合规资料'],
+    similarity: 95,
+  }
+  showDuplicateModal.value = true
 }
 
 function handleViewFile(fileName: string) {
@@ -226,8 +283,13 @@ function handleViewLink(taskName: string) {
 }
 
 async function handleViewResult(item: ParseQueueItem) {
+  if (item.status === '疑似重复') {
+    handleViewDuplicateDetail(item)
+    return
+  }
   if (item.jobId) {
     currentJobId.value = item.jobId
+    currentStep.value = 3
     await loadJobDetails(item.jobId)
   } else if (currentJobId.value) {
     await loadJobDetails(currentJobId.value)
@@ -250,6 +312,10 @@ function getStatusColor(status: string) {
     case '已关联': return '#69e36f'
     case '匹配中': return '#2f9cff'
     case '待确认': return '#ffb347'
+    case '解析中': return '#2f9cff'
+    case '已入库': return '#69e36f'
+    case '疑似重复': return '#ffb347'
+    case '解析失败': return '#ff4f5e'
     default: return '#8fa9c8'
   }
 }
@@ -268,20 +334,248 @@ function getFileIcon(fileName: string) {
 function getQueueButtonAction(status: string): string {
   if (status === '解析完成' || status === '已入库' || status === '待确认') return '查看结果'
   if (status.includes('匹配中') || status.includes('解析中')) return '查看进度'
-  if (status.includes('失败')) return '查看原因'
+  if (status === '疑似重复') return '处理重复'
+  if (status.includes('失败')) return '重新解析'
   return '查看'
+}
+
+const filteredQueue = computed(() => {
+  let list = parseQueueList.value
+  if (statusFilter.value !== '全部') {
+    list = list.filter(item => item.status === statusFilter.value)
+  }
+  if (searchKeyword.value) {
+    const keyword = searchKeyword.value.toLowerCase()
+    list = list.filter(item => item.fileName.toLowerCase().includes(keyword))
+  }
+  return list
+})
+
+const paginatedQueue = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredQueue.value.slice(start, start + pageSize.value)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredQueue.value.length / pageSize.value)))
+
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+}
+
+function changePageSize(size: number) {
+  pageSize.value = size
+  currentPage.value = 1
+}
+
+function getPageNumbers(): number[] {
+  const pages: number[] = []
+  const maxPages = 5
+  let start = Math.max(1, currentPage.value - Math.floor(maxPages / 2))
+  let end = Math.min(totalPages.value, start + maxPages - 1)
+  if (end - start + 1 < maxPages) {
+    start = Math.max(1, end - maxPages + 1)
+  }
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+}
+
+watch(filteredQueue, () => {
+  currentPage.value = 1
+})
+
+function toggleQueueItemSelect(id: string) {
+  const idx = selectedQueueItems.value.indexOf(id)
+  if (idx > -1) {
+    selectedQueueItems.value.splice(idx, 1)
+  } else {
+    selectedQueueItems.value.push(id)
+  }
+}
+
+const isAllSelected = computed(() => {
+  return paginatedQueue.value.length > 0 && paginatedQueue.value.every(item => selectedQueueItems.value.includes(item.id))
+})
+
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    selectedQueueItems.value = selectedQueueItems.value.filter(id => !paginatedQueue.value.some(item => item.id === id))
+  } else {
+    for (const item of paginatedQueue.value) {
+      if (!selectedQueueItems.value.includes(item.id)) {
+        selectedQueueItems.value.push(item.id)
+      }
+    }
+  }
+}
+
+function handleRetryParse(item: ParseQueueItem) {
+  showMessage(`正在重新解析文件：${item.fileName}`, 'info')
+  const idx = parseQueueList.value.findIndex(i => i.id === item.id)
+  if (idx > -1) {
+    parseQueueList.value[idx].status = '解析中'
+    parseQueueList.value[idx].progress = 0
+  }
+}
+
+function handleClearFailed(item: ParseQueueItem) {
+  const idx = parseQueueList.value.findIndex(i => i.id === item.id)
+  if (idx > -1) {
+    parseQueueList.value.splice(idx, 1)
+    showMessage(`已清除失败记录：${item.fileName}`, 'success')
+  }
+}
+
+function handleBatchRetry() {
+  const failedItems = selectedQueueItems.value
+    .map(id => parseQueueList.value.find(i => i.id === id))
+    .filter(i => i && i.status === '解析失败') as ParseQueueItem[]
+  if (failedItems.length === 0) {
+    showMessage('请先选择解析失败的文件', 'info')
+    return
+  }
+  for (const item of failedItems) {
+    handleRetryParse(item)
+  }
+  showMessage(`已批量重新解析 ${failedItems.length} 个文件`, 'success')
+}
+
+function handleBatchClearFailed() {
+  const failedItems = selectedQueueItems.value
+    .map(id => parseQueueList.value.find(i => i.id === id))
+    .filter(i => i && i.status === '解析失败') as ParseQueueItem[]
+  if (failedItems.length === 0) {
+    showMessage('请先选择解析失败的文件', 'info')
+    return
+  }
+  for (const item of failedItems) {
+    const idx = parseQueueList.value.findIndex(i => i.id === item.id)
+    if (idx > -1) {
+      parseQueueList.value.splice(idx, 1)
+    }
+  }
+  selectedQueueItems.value = []
+  showMessage(`已批量清除 ${failedItems.length} 条失败记录`, 'success')
+}
+
+function startEditField(field: string, value: string) {
+  editingField.value = field
+  editFieldValue.value = value
+}
+
+function saveEditField(field: string) {
+  if (field === 'documentType') aiParseResult.value.documentType = editFieldValue.value
+  if (field === 'cycle') aiParseResult.value.cycle = editFieldValue.value
+  if (field === 'responsibilityUnit') aiParseResult.value.responsibilityUnit = editFieldValue.value
+  if (field === 'projectSection') aiParseResult.value.projectSection = editFieldValue.value
+  if (field === 'engineeringObject') aiParseResult.value.engineeringObject = editFieldValue.value
+  if (field === 'validPeriod') aiParseResult.value.validPeriod = editFieldValue.value
+  if (field === 'suggestedTask') aiParseResult.value.suggestedTask = editFieldValue.value
+  if (field === 'suggestedKpiName') aiParseResult.value.suggestedKpiName = editFieldValue.value
+  editingField.value = null
+  currentStep.value = 3
+  showMessage('已保存修改', 'success')
+}
+
+function cancelEditField() {
+  editingField.value = null
+}
+
+function handleReuseExisting() {
+  showMessage('已复用已有资料，取消当前上传', 'success')
+  showDuplicateModal.value = false
+}
+
+function handleUploadAsNewVersion() {
+  showMessage('已作为新版本上传', 'success')
+  showDuplicateModal.value = false
+  currentStep.value = 3
+}
+
+function handleConfirmDifferent() {
+  showMessage('已确认为不同资料，继续处理', 'success')
+  showDuplicateModal.value = false
+  currentStep.value = 3
+  const idx = parseQueueList.value.findIndex(i => i.id === currentDuplicateFile.value?.id)
+  if (idx > -1) {
+    parseQueueList.value[idx].status = '待确认'
+  }
+}
+
+function handleCancelUpload() {
+  showDuplicateModal.value = false
+}
+
+function handleReuseAndRecommend(task: SuggestedTask) {
+  showMessage(`已复用并关联：${task.taskName}`, 'success')
+}
+
+function handleIgnoreRecommend(task: SuggestedTask) {
+  const idx = suggestedTasks.value.findIndex(t => t.id === task.id)
+  if (idx > -1) {
+    suggestedTasks.value.splice(idx, 1)
+  }
+  showMessage('已忽略该推荐', 'info')
+}
+
+const existingDocForRecommend = computed<Document | null>(() => {
+  return mockDocuments.find(d => d.id === 'd1') || null
+})
+
+const hasUnprocessedDuplicate = computed(() => {
+  return parseQueueList.value.some(item => item.status === '疑似重复')
+})
+
+const recPageSize = 3
+const recCurrentPage = ref(1)
+
+const allRecommendedTasks = computed<SuggestedTask[]>(() => {
+  const seen = new Set<string>()
+  const unique: SuggestedTask[] = []
+  for (const task of suggestedTasks.value) {
+    if (seen.has(task.id)) continue
+    seen.add(task.id)
+    unique.push(task)
+  }
+  return unique
+})
+
+const recTotalPages = computed(() => Math.max(1, Math.ceil(allRecommendedTasks.value.length / recPageSize)))
+
+const recommendedTasks = computed<SuggestedTask[]>(() => {
+  const start = (recCurrentPage.value - 1) * recPageSize
+  return allRecommendedTasks.value.slice(start, start + recPageSize)
+})
+
+function goToRecPage(page: number) {
+  if (page < 1 || page > recTotalPages.value) return
+  recCurrentPage.value = page
 }
 </script>
 
 <template>
   <div class="workspace-smart-upload">
-    <div class="page-header">
-      <div class="page-title">ESG智能入库</div>
+    <div class="ws-page-header">
+      <div class="ws-page-title-group">
+        <div class="ws-page-title">ESG智能入库</div>
+        <div class="ws-page-subtitle">智能解析资料并关联指标、事项和任务</div>
+      </div>
+      <div class="ws-page-header-extra">
+        <div class="step-indicator">
+          <div v-for="(step, idx) in steps" :key="step.num" class="step-item" :class="{ active: currentStep >= Number(step.num), done: currentStep > Number(step.num) }">
+            <span class="step-num">{{ step.num }}</span>
+            <span class="step-label">{{ step.label }}</span>
+            <span v-if="idx < steps.length - 1" class="step-arrow">→</span>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <div v-if="pageMessage" class="ws-page-message" :class="pageMessageType">{{ pageMessage }}</div>
 
     <div class="main-content">
       <div class="left-section">
-        <div class="upload-section">
+        <div class="upload-section ws-panel">
           <input
             ref="fileInputRef"
             class="hidden-file-input"
@@ -289,296 +583,547 @@ function getQueueButtonAction(status: string): string {
             accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,.rar"
             @change="handleFileChange"
           />
-          <div class="section-header">
-            <div class="section-title">上传资料</div>
-            <div class="section-desc">支持 PDF、Word、Excel、图片、压缩包等格式，单个文件最大 200MB</div>
+          <div class="ws-panel-header">
+            <div class="ws-panel-title">上传资料</div>
           </div>
-          
+
           <div class="upload-area" @click="handleSelectFile">
             <div class="upload-icon">
-              <Upload :size="36" />
+              <Upload :size="28" />
             </div>
             <div class="upload-text">将文件拖拽到此处，或选择文件上传</div>
-            <div class="upload-subtext">一次上传，智能解析，支持多任务复用</div>
           </div>
+
+          <div class="upload-desc">支持PDF、Word、Excel、图片及压缩包，单个文件最大200MB。上传后自动识别资料类型、所属周期及关联任务。</div>
 
           <div class="upload-buttons">
             <button class="upload-btn primary" @click="handleSelectFile">
-              <Upload :size="16" />
-              <span>选择文件</span>
+              <Upload :size="14" />
+              <span>选择本地文件</span>
             </button>
             <button class="upload-btn" @click="handleBatchImport">
-              <FolderOpen :size="16" />
+              <FolderOpen :size="14" />
               <span>批量导入</span>
             </button>
             <button class="upload-btn" @click="handleSelectFromCenter">
-              <Link2 :size="16" />
+              <Link2 :size="14" />
               <span>从资料中心选择</span>
             </button>
           </div>
-
-          <div class="parse-queue">
-            <div class="queue-header">
-              <span class="queue-title">解析队列（{{ parseQueueList.length }}）</span>
-            </div>
-            <div class="queue-list">
-              <div v-for="item in parseQueueList" :key="item.id" class="queue-item">
-                <div class="file-info">
-                  <component :is="getFileIcon(item.fileName)" :size="16" class="file-icon" />
-                  <span class="file-name">{{ item.fileName }}</span>
-                </div>
-                <span class="file-size">{{ item.size }}</span>
-                <div class="progress-wrapper">
-                  <div class="progress-bar">
-                    <div class="progress-fill" :style="{ width: `${item.progress}%` }"></div>
-                  </div>
-                  <span class="progress-text">{{ item.progress }}%</span>
-                </div>
-                <span :class="['queue-status', { completed: item.status === '解析完成' || item.status === '已入库' }]">{{ item.status }}</span>
-                <button class="action-btn" :class="{ primary: getQueueButtonAction(item.status) === '查看结果' }" @click.stop="handleViewResult(item)">{{ getQueueButtonAction(item.status) }}</button>
-              </div>
-            </div>
-          </div>
         </div>
 
-        <div class="suggested-section">
-          <div class="section-header">
-            <div class="section-title">建议关联任务</div>
-            <span class="section-tip">同一资料只入库一次，可服务多个流程</span>
+        <div class="parse-queue-section ws-panel">
+          <div class="queue-toolbar">
+            <div class="queue-title-row">
+              <span class="queue-title">解析队列（{{ filteredQueue.length }}）</span>
+            </div>
+            <div class="queue-filters">
+              <div class="status-tabs">
+                <span
+                  v-for="status in statusOptions"
+                  :key="status"
+                  class="status-tab"
+                  :class="{ active: statusFilter === status }"
+                  @click="statusFilter = status; currentPage = 1"
+                >{{ status }}</span>
+              </div>
+              <div class="search-box">
+                <Search :size="14" class="search-icon" />
+                <input v-model="searchKeyword" type="text" placeholder="搜索文件名..." class="search-input" @input="currentPage = 1" />
+              </div>
+            </div>
+            <div class="queue-actions">
+              <button class="toolbar-btn" @click="handleBatchRetry" :disabled="selectedQueueItems.length === 0">
+                <RefreshCw :size="14" />
+                <span>批量重解析</span>
+              </button>
+              <button class="toolbar-btn danger" @click="handleBatchClearFailed" :disabled="selectedQueueItems.length === 0">
+                <Trash2 :size="14" />
+                <span>清除失败</span>
+              </button>
+            </div>
           </div>
-          <div class="suggested-table-wrapper">
-            <table class="suggested-table">
-              <thead>
-                <tr>
-                  <th class="checkbox-col">
-                    <input type="checkbox" :checked="selectedTasks.length === suggestedTasks.length" @change="selectedTasks = selectedTasks.length === suggestedTasks.length ? [] : suggestedTasks.map(t => t.id)" />
-                  </th>
-                  <th>资料名称</th>
-                  <th>建议关联任务</th>
-                  <th>所属模块</th>
-                  <th>匹配度</th>
-                  <th>复用情况</th>
-                  <th>确认状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="task in suggestedTasks" :key="task.id">
-                  <td class="checkbox-col">
-                    <input type="checkbox" :checked="isSelected(task.id)" @change="toggleTaskSelect(task.id)" />
-                  </td>
-                  <td class="doc-name">
-                    <component :is="getFileIcon(task.documentName)" :size="14" class="doc-icon" />
-                    {{ task.documentName }}
-                  </td>
-                  <td>{{ task.taskName }}</td>
-                  <td>
-                    <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
-                      {{ task.module }} {{ task.moduleName }}
-                    </span>
-                  </td>
-                  <td>
-                    <div class="match-bar">
-                      <div class="match-fill" :style="{ width: `${task.matchRate}%` }"></div>
-                    </div>
-                    <span class="match-text">{{ task.matchRate }}%</span>
-                  </td>
-                  <td>{{ task.reuseCount === 0 ? '未复用' : `已复用 ${task.reuseCount} 次` }}</td>
-                  <td>
-                    <span class="status-tag" :style="{ color: getStatusColor(task.confirmStatus) }">
-                      {{ task.confirmStatus }}
-                    </span>
-                  </td>
-                  <td>
-                    <button class="link-btn" v-if="task.confirmStatus !== '已关联'" @click="handleConfirmAndLink">确认关联</button>
-                    <button class="view-btn" v-else @click="handleViewLink(task.taskName)">查看关联</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+
+          <div class="ws-table-container">
+            <div class="ws-table-header-wrapper">
+              <table class="ws-table">
+                <colgroup>
+                  <col class="col-checkbox" />
+                  <col class="col-file" />
+                  <col class="col-size" />
+                  <col class="col-progress" />
+                  <col class="col-status" />
+                  <col class="col-time" />
+                  <col class="col-action" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th class="col-checkbox">
+                      <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
+                    </th>
+                    <th>文件名</th>
+                    <th>大小</th>
+                    <th>进度</th>
+                    <th>状态</th>
+                    <th>上传时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+              </table>
+            </div>
+            <div class="ws-table-body-wrapper no-scroll">
+              <table class="ws-table">
+                <colgroup>
+                  <col class="col-checkbox" />
+                  <col class="col-file" />
+                  <col class="col-size" />
+                  <col class="col-progress" />
+                  <col class="col-status" />
+                  <col class="col-time" />
+                  <col class="col-action" />
+                </colgroup>
+                <tbody>
+                  <tr v-for="item in paginatedQueue" :key="item.id" :class="{ selected: selectedQueueItems.includes(item.id) }">
+                    <td class="col-checkbox">
+                      <input type="checkbox" :checked="selectedQueueItems.includes(item.id)" @change="toggleQueueItemSelect(item.id)" />
+                    </td>
+                    <td class="col-file">
+                      <component :is="getFileIcon(item.fileName)" :size="14" class="file-icon" />
+                      <span class="file-name-text">{{ item.fileName }}</span>
+                    </td>
+                    <td class="col-size">{{ item.size }}</td>
+                    <td class="col-progress">
+                      <div class="progress-bar">
+                        <div class="progress-fill" :style="{ width: `${item.progress}%` }"></div>
+                      </div>
+                      <span class="progress-text">{{ item.progress }}%</span>
+                    </td>
+                    <td class="col-status">
+                      <span class="status-badge" :style="{ color: getStatusColor(item.status), borderColor: getStatusColor(item.status) + '50', background: getStatusColor(item.status) + '10' }">
+                        {{ item.status }}
+                      </span>
+                    </td>
+                    <td class="col-time">{{ item.uploadTime || '-' }}</td>
+                    <td class="col-action">
+                      <button class="row-action-btn primary" @click.stop="handleViewResult(item)">
+                        {{ getQueueButtonAction(item.status) }}
+                      </button>
+                      <button v-if="item.status === '解析失败'" class="row-action-btn" @click.stop="handleRetryParse(item)">
+                        <RefreshCw :size="12" />
+                      </button>
+                      <button v-if="item.status === '解析失败'" class="row-action-btn danger" @click.stop="handleClearFailed(item)">
+                        <Trash2 :size="12" />
+                      </button>
+                    </td>
+                  </tr>
+                  <tr v-if="paginatedQueue.length === 0">
+                    <td colspan="7" class="empty-row">暂无数据</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="ws-pagination-bar">
+              <div class="ws-pagination-info">
+                共 <span class="highlight">{{ filteredQueue.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
+              </div>
+              <div class="ws-pagination-controls">
+                <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+                <button
+                  v-for="p in getPageNumbers()"
+                  :key="p"
+                  class="ws-page-btn"
+                  :class="{ active: currentPage === p }"
+                  @click="goToPage(p)"
+                >
+                  {{ p }}
+                </button>
+                <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
+                <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
+                  <option :value="10">10条/页</option>
+                  <option :value="20">20条/页</option>
+                  <option :value="30">30条/页</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <div class="right-section">
-        <div class="ai-summary-card">
-          <div class="card-header">
-            <div class="card-title">AI 解析摘要</div>
-            <button class="detail-btn" @click="handleViewParseDetail">查看解析详情</button>
+        <div class="ai-summary-card ws-panel">
+          <div class="ws-panel-header">
+            <div class="ws-panel-title">
+              <Sparkles :size="16" class="ws-panel-title-icon" />
+              <span>AI解析摘要</span>
+            </div>
+            <button class="detail-btn" @click="handleViewParseDetail">查看详情</button>
           </div>
           <div class="ai-fields">
             <div class="ai-field">
               <span class="field-label">资料类型</span>
-              <span class="field-value">{{ aiParseResult.documentType }}</span>
+              <div v-if="editingField === 'documentType'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('documentType')" @blur="saveEditField('documentType')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('documentType', aiParseResult.documentType)">
+                <span class="field-value">{{ aiParseResult.documentType }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
             </div>
             <div class="ai-field">
               <span class="field-label">资料周期</span>
-              <span class="field-value">{{ aiParseResult.cycle }}</span>
+              <div v-if="editingField === 'cycle'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('cycle')" @blur="saveEditField('cycle')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('cycle', aiParseResult.cycle)">
+                <span class="field-value">{{ aiParseResult.cycle }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
             </div>
             <div class="ai-field">
-              <span class="field-label">所属模块</span>
+              <span class="field-label">ESG模块</span>
               <span class="field-value" :style="{ color: getModuleColor(aiParseResult.module) }">
-                {{ aiParseResult.module }} {{ aiParseResult.moduleName }}
+                {{ aiParseResult.module }} · {{ aiParseResult.moduleName }}
               </span>
             </div>
             <div class="ai-field">
               <span class="field-label">责任单位</span>
-              <span class="field-value">{{ aiParseResult.responsibilityUnit }}</span>
+              <div v-if="editingField === 'responsibilityUnit'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('responsibilityUnit')" @blur="saveEditField('responsibilityUnit')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('responsibilityUnit', aiParseResult.responsibilityUnit)">
+                <span class="field-value">{{ aiParseResult.responsibilityUnit }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
+            </div>
+            <div class="ai-field">
+              <span class="field-label">项目/标段</span>
+              <div v-if="editingField === 'projectSection'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('projectSection')" @blur="saveEditField('projectSection')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('projectSection', aiParseResult.projectSection || '-')">
+                <span class="field-value">{{ aiParseResult.projectSection || '-' }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
+            </div>
+            <div class="ai-field">
+              <span class="field-label">工程对象/事项</span>
+              <div v-if="editingField === 'engineeringObject'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('engineeringObject')" @blur="saveEditField('engineeringObject')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('engineeringObject', aiParseResult.engineeringObject || '-')">
+                <span class="field-value">{{ aiParseResult.engineeringObject || '-' }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
             </div>
             <div class="ai-field">
               <span class="field-label">有效期</span>
-              <span class="field-value">{{ aiParseResult.validPeriod }}</span>
+              <div v-if="editingField === 'validPeriod'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('validPeriod')" @blur="saveEditField('validPeriod')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('validPeriod', aiParseResult.validPeriod)">
+                <span class="field-value">{{ aiParseResult.validPeriod }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
+            </div>
+            <div class="ai-field">
+              <span class="field-label">建议关联任务</span>
+              <div v-if="editingField === 'suggestedTask'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('suggestedTask')" @blur="saveEditField('suggestedTask')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('suggestedTask', aiParseResult.suggestedTask)">
+                <span class="field-value link-like">{{ aiParseResult.suggestedTask }}</span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
+            </div>
+            <div class="ai-field">
+              <span class="field-label">建议关联指标</span>
+              <div v-if="editingField === 'suggestedKpiName'" class="field-edit">
+                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('suggestedKpiName')" @blur="saveEditField('suggestedKpiName')" />
+              </div>
+              <div v-else class="field-value-wrap" @dblclick="startEditField('suggestedKpiName', aiParseResult.suggestedKpiCode + ' ' + aiParseResult.suggestedKpiName)">
+                <span class="field-value kpi-value">
+                  <span class="kpi-code">{{ aiParseResult.suggestedKpiCode }}</span>
+                  {{ aiParseResult.suggestedKpiName }}
+                </span>
+                <span class="edit-hint">双击编辑</span>
+              </div>
+            </div>
+            <div class="ai-field confidence-field">
+              <span class="field-label">解析置信度</span>
+              <div class="confidence-wrap">
+                <div class="confidence-bar">
+                  <div class="confidence-fill" :style="{ width: `${aiParseResult.confidence}%` }"></div>
+                </div>
+                <span class="confidence-text">{{ aiParseResult.confidence }}%</span>
+              </div>
             </div>
           </div>
 
-          <div class="duplicate-warning" v-if="aiParseResult.duplicateCount > 0">
+          <div v-if="aiParseResult.duplicateCount > 0" class="duplicate-warning" @click="showDuplicateModal = true">
             <AlertTriangle :size="16" class="warning-icon" />
             <span class="warning-text">疑似重复</span>
             <span class="warning-count">{{ aiParseResult.duplicateCount }}份</span>
-            <button class="warning-btn" @click="handleViewDuplicateDetail">查看重复详情</button>
-          </div>
-
-          <div class="ai-tip">
-            <div class="tip-header">
-              <span class="tip-icon">AI</span>
-              <span class="tip-title">AI提示</span>
-            </div>
-            <p class="tip-content">{{ aiParseResult.duplicateTip }}</p>
+            <span class="warning-btn-text">点击处理 →</span>
           </div>
         </div>
 
-        <div class="ai-recommend-card">
-          <div class="card-header">
-            <div class="card-title">AI 智能推荐</div>
+        <div class="ai-recommend-card ws-panel">
+          <div class="ws-panel-header">
+            <div class="ws-panel-title">
+              <Layers :size="16" class="ws-panel-title-icon" />
+              <span>AI智能推荐</span>
+            </div>
+            <span class="rec-count">共 {{ allRecommendedTasks.length }} 条</span>
           </div>
-          <div class="recommend-file">
-            <FileText :size="24" class="file-icon" />
-            <div class="file-info">
-              <span class="file-name">弃渣场巡查记录_2026-07.pdf</span>
-              <span class="match-rate">匹配度：96%</span>
+          <div class="recommend-list">
+            <div v-for="task in recommendedTasks" :key="task.id" class="recommend-item">
+              <div class="recommend-file-info">
+                <div class="recommend-file-name">
+                  <FileText :size="16" class="recommend-file-icon" />
+                  <span :title="task.documentName">{{ task.documentName }}</span>
+                </div>
+                <div class="recommend-meta">
+                  <span class="match-badge" :style="{ color: getModuleColor(task.module), borderColor: getModuleColor(task.module) + '50' }">
+                    匹配度 {{ task.matchRate }}%
+                  </span>
+                  <span class="reuse-count">已关联 {{ task.reuseCount }} 个任务</span>
+                </div>
+                <div class="recommend-basis">
+                  <span class="basis-label">推荐依据：</span>
+                  <span class="basis-text" :title="task.matchBasis">{{ task.matchBasis || '内容关键词匹配' }}</span>
+                </div>
+              </div>
+              <div class="recommend-actions">
+                <button class="rec-btn primary" @click="handleReuseAndRecommend(task)">复用并关联</button>
+                <button class="rec-btn" @click="handleViewFile(task.documentName)">
+                  <Eye :size="12" />
+                  <span>查看</span>
+                </button>
+                <button class="rec-btn ghost" @click="handleIgnoreRecommend(task)">
+                  <XCircle :size="12" />
+                  <span>忽略</span>
+                </button>
+              </div>
             </div>
           </div>
-          <div class="recommend-text">该资料已用于其他流程，无需重复上传</div>
-          <div class="recommend-actions">
-            <button class="action-btn primary" @click="handleConfirmAndLink">确认关联</button>
-            <button class="action-btn" @click="handleViewFile('弃渣场巡查记录_2026-07.pdf')">查看文件</button>
+          <div v-if="allRecommendedTasks.length > recPageSize" class="rec-pagination">
+            <span class="rec-pagination-info">共 {{ allRecommendedTasks.length }} 条</span>
+            <div class="rec-pagination-controls">
+              <button class="rec-page-btn" :disabled="recCurrentPage === 1" @click="goToRecPage(recCurrentPage - 1)">上一页</button>
+              <button
+                v-for="p in recTotalPages"
+                :key="p"
+                class="rec-page-btn"
+                :class="{ active: recCurrentPage === p }"
+                @click="goToRecPage(p)"
+              >{{ p }}</button>
+              <button class="rec-page-btn" :disabled="recCurrentPage === recTotalPages" @click="goToRecPage(recCurrentPage + 1)">下一页</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="bottom-actions">
-      <button class="cancel-btn" @click="handleCancel">取消</button>
-      <button class="save-btn" @click="handleSaveToCenter">保存到资料中心</button>
-      <button class="confirm-btn" @click="handleConfirmAndLink">确认入库并关联</button>
+    <div class="ws-bottom-actions">
+      <button class="ws-btn ws-btn-secondary" @click="handleCancel">取消</button>
+      <button class="ws-btn ws-btn-view" @click="handleSaveToCenter">仅保存到资料中心</button>
+      <button class="ws-btn ws-btn-primary" :disabled="hasUnprocessedDuplicate" @click="handleConfirmAndLink">
+        确认入库并关联
+      </button>
+    </div>
+
+    <div v-if="showDuplicateModal" class="modal-overlay" @click.self="showDuplicateModal = false">
+      <div class="modal duplicate-modal">
+        <div class="modal-header">
+          <span class="modal-title">
+            <AlertTriangle :size="18" class="modal-title-icon" />
+            疑似重复资料
+          </span>
+          <button class="modal-close" @click="showDuplicateModal = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="duplicate-compare">
+            <div class="compare-col">
+              <div class="compare-label new-label">
+                <Upload :size="14" />
+                <span>新上传文件</span>
+              </div>
+              <div class="compare-content">
+                <div class="compare-item">
+                  <span class="compare-key">文件名</span>
+                  <span class="compare-val">{{ currentDuplicateFile?.fileName }}</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">文件哈希</span>
+                  <span class="compare-val hash">{{ currentDuplicateFile?.fileHash }}</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">文件大小</span>
+                  <span class="compare-val">{{ currentDuplicateFile?.fileSize }}</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">资料周期</span>
+                  <span class="compare-val">{{ currentDuplicateFile?.cycle }}</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">上传时间</span>
+                  <span class="compare-val">{{ currentDuplicateFile?.uploadTime }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="compare-vs">
+              <div class="vs-badge">
+                <span>相似度</span>
+                <strong>{{ currentDuplicateFile?.similarity }}%</strong>
+              </div>
+            </div>
+
+            <div class="compare-col">
+              <div class="compare-label existing-label">
+                <Copy :size="14" />
+                <span>已有文件</span>
+              </div>
+              <div class="compare-content">
+                <div class="compare-item">
+                  <span class="compare-key">文件名</span>
+                  <span class="compare-val">临时用地批复_扫描件.pdf</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">文件哈希</span>
+                  <span class="compare-val hash">SHA256: f6a1b2c3d4e5...</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">文件大小</span>
+                  <span class="compare-val">3.20MB</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">资料周期</span>
+                  <span class="compare-val">2026年度</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">上传时间</span>
+                  <span class="compare-val">2026-03-20 11:00</span>
+                </div>
+                <div class="compare-item">
+                  <span class="compare-key">已关联任务</span>
+                  <span class="compare-val task-list">临时用地合规资料</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn secondary" @click="handleCancelUpload">取消上传</button>
+          <button class="modal-btn" @click="handleConfirmDifferent">确认为不同资料</button>
+          <button class="modal-btn" @click="handleUploadAsNewVersion">作为新版本上传</button>
+          <button class="modal-btn primary" @click="handleReuseExisting">复用已有资料</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .workspace-smart-upload {
-  padding: 20px;
-  height: calc(100% - 120px);
+  padding: 14px 16px;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  gap: 12px;
 }
 
-.page-header {
-  margin-bottom: 20px;
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.page-message {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
-  line-height: 1.5;
+  color: #5a7a9a;
 }
 
-.page-message.info {
-  background: rgba(47, 156, 255, 0.08);
-  border: 1px solid rgba(47, 156, 255, 0.18);
-  color: #9fc7ff;
-}
-
-.page-message.success {
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+.step-item.active {
   color: #69e36f;
 }
 
-.page-message.error {
-  background: rgba(255, 79, 94, 0.08);
-  border: 1px solid rgba(255, 79, 94, 0.2);
-  color: #ff8a96;
+.step-item.done {
+  color: #8fa9c8;
+}
+
+.step-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(105, 227, 111, 0.1);
+  border: 1px solid rgba(105, 227, 111, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5a7a9a;
+}
+
+.step-item.active .step-num {
+  background: linear-gradient(135deg, #69e36f, #2f9cff);
+  border-color: transparent;
+  color: #031020;
+}
+
+.step-item.done .step-num {
+  background: rgba(105, 227, 111, 0.15);
+  border-color: rgba(105, 227, 111, 0.4);
+  color: #69e36f;
+}
+
+.step-label {
+  font-size: 12px;
+}
+
+.step-arrow {
+  color: #3a5a7a;
+  margin-left: 4px;
 }
 
 .main-content {
   display: flex;
-  gap: 20px;
+  gap: 12px;
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .left-section {
-  flex: 1;
+  width: 60%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .right-section {
-  width: 380px;
+  width: 40%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.upload-section, .suggested-section {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 10px;
-  padding: 16px;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .hidden-file-input {
   display: none;
 }
 
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.section-desc {
-  font-size: 12px;
-  color: #8fa9c8;
-  margin-top: 4px;
-}
-
-.section-tip {
-  font-size: 11px;
-  color: #5a7a9a;
-}
-
 .upload-area {
   border: 2px dashed rgba(105, 227, 111, 0.3);
-  border-radius: 10px;
-  padding: 40px;
+  border-radius: 8px;
+  padding: 24px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
@@ -591,25 +1136,29 @@ function getQueueButtonAction(status: string): string {
 
 .upload-icon {
   color: #69e36f;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: center;
 }
 
 .upload-text {
-  font-size: 14px;
+  font-size: 13px;
   color: #e8f3ff;
   font-weight: 500;
 }
 
-.upload-subtext {
+.upload-desc {
   font-size: 12px;
   color: #8fa9c8;
-  margin-top: 6px;
+  margin-top: 10px;
+  line-height: 1.6;
+  text-align: center;
 }
 
 .upload-buttons {
   display: flex;
-  gap: 12px;
-  margin-top: 16px;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .upload-btn {
@@ -617,13 +1166,13 @@ function getQueueButtonAction(status: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 10px 12px;
   background: rgba(105, 227, 111, 0.08);
   border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 8px;
+  border-radius: 6px;
   color: #8fa9c8;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -640,61 +1189,177 @@ function getQueueButtonAction(status: string): string {
   font-weight: 600;
 }
 
-.parse-queue {
-  margin-top: 16px;
+.parse-queue-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.queue-header {
+.queue-toolbar {
   margin-bottom: 12px;
 }
 
+.queue-title-row {
+  margin-bottom: 10px;
+}
+
 .queue-title {
-  font-size: 12px;
-  color: #8fa9c8;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8f3ff;
 }
 
-.queue-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.queue-item {
+.queue-filters {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.status-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.status-tab {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #8fa9c8;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.status-tab:hover {
+  color: #69e36f;
+}
+
+.status-tab.active {
+  color: #69e36f;
+  background: rgba(105, 227, 111, 0.1);
+  border-color: rgba(105, 227, 111, 0.3);
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
   background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(105, 227, 111, 0.15);
   border-radius: 6px;
+  margin-left: auto;
+}
+
+.search-icon {
+  color: #5a7a9a;
+  flex-shrink: 0;
+}
+
+.search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e8f3ff;
+  font-size: 12px;
+  width: 140px;
+}
+
+.search-input::placeholder {
+  color: #5a7a9a;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.2);
+  border-radius: 4px;
+  color: #8fa9c8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: rgba(105, 227, 111, 0.15);
+  color: #69e36f;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-btn.danger {
+  background: rgba(255, 79, 94, 0.08);
+  border-color: rgba(255, 79, 94, 0.2);
+  color: #ff8a96;
+}
+
+.toolbar-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 79, 94, 0.15);
+}
+
+.ws-table {
+  table-layout: fixed;
+}
+
+.col-checkbox {
+  width: 40px;
+}
+
+col.col-file {
+  width: auto;
+}
+
+.ws-table td.col-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .file-icon {
   color: #8fa9c8;
+  flex-shrink: 0;
 }
 
-.file-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-}
-
-.file-name {
-  font-size: 12px;
+.file-name-text {
+  font-size: 13px;
   color: #e8f3ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-size {
-  font-size: 11px;
-  color: #5a7a9a;
-  width: 80px;
+.col-size {
+  width: 90px;
 }
 
-.progress-wrapper {
+.ws-table td.col-size {
+  color: #8fa9c8;
+  font-size: 12px;
+}
+
+.col-progress {
+  width: 140px;
+}
+
+.ws-table td.col-progress {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 120px;
 }
 
 .progress-bar {
@@ -703,6 +1368,7 @@ function getQueueButtonAction(status: string): string {
   background: rgba(105, 227, 111, 0.1);
   border-radius: 3px;
   overflow: hidden;
+  min-width: 40px;
 }
 
 .progress-fill {
@@ -714,144 +1380,91 @@ function getQueueButtonAction(status: string): string {
 .progress-text {
   font-size: 11px;
   color: #8fa9c8;
-  width: 35px;
+  width: 38px;
+  flex-shrink: 0;
 }
 
-.queue-status {
+.col-status {
+  width: 90px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
   font-size: 11px;
-  color: #ffb347;
-  width: 80px;
+  font-weight: 500;
+  border: 1px solid;
+  white-space: nowrap;
 }
 
-.queue-status.completed {
-  color: #69e36f;
+.col-time {
+  width: 130px;
 }
 
-.action-btn {
+.ws-table td.col-time {
+  font-size: 12px;
+  color: #8fa9c8;
+}
+
+.col-action {
+  width: 180px;
+}
+
+.ws-table td.col-action {
+  text-align: center;
+}
+
+.row-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 10px;
-  background: rgba(105, 227, 111, 0.1);
+  background: rgba(105, 227, 111, 0.08);
   border: 1px solid rgba(105, 227, 111, 0.2);
   border-radius: 4px;
   color: #8fa9c8;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
+  margin-right: 4px;
+  transition: all 0.2s;
 }
 
-.action-btn.primary {
+.row-action-btn:hover {
   background: rgba(105, 227, 111, 0.15);
   color: #69e36f;
 }
 
-.suggested-table-wrapper {
-  overflow-x: auto;
-}
-
-.suggested-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.suggested-table th {
-  text-align: left;
-  padding: 10px 12px;
-  font-size: 11px;
-  color: #8fa9c8;
-  font-weight: 500;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.checkbox-col {
-  width: 40px;
-}
-
-.suggested-table td {
-  padding: 10px 12px;
-  font-size: 12px;
-  color: #e8f3ff;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
-}
-
-.doc-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.doc-icon {
-  color: #8fa9c8;
-}
-
-.module-tag {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.status-tag {
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.match-bar {
-  width: 60px;
-  height: 6px;
-  background: rgba(105, 227, 111, 0.1);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.match-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #69e36f, #2f9cff);
-  border-radius: 3px;
-}
-
-.match-text {
-  margin-left: 8px;
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.link-btn {
-  padding: 4px 10px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 4px;
+.row-action-btn.primary {
+  background: rgba(105, 227, 111, 0.12);
   color: #69e36f;
-  font-size: 11px;
-  cursor: pointer;
+  border-color: rgba(105, 227, 111, 0.3);
 }
 
-.view-btn {
-  padding: 4px 10px;
-  background: rgba(105, 227, 111, 0.05);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 11px;
-  cursor: pointer;
+.row-action-btn.danger {
+  background: rgba(255, 79, 94, 0.08);
+  border-color: rgba(255, 79, 94, 0.2);
+  color: #ff8a96;
 }
 
-.ai-summary-card, .ai-recommend-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 10px;
-  padding: 16px;
+.row-action-btn.danger:hover {
+  background: rgba(255, 79, 94, 0.15);
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+.empty-row {
+  text-align: center;
+  color: #5a7a9a;
+  padding: 40px !important;
+  font-size: 12px;
 }
 
-.card-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #e8f3ff;
+.ai-summary-card {
+  flex-shrink: 0;
+}
+
+.ai-recommend-card {
+  flex: 1;
+  min-height: 0;
 }
 
 .detail-btn {
@@ -865,24 +1478,126 @@ function getQueueButtonAction(status: string): string {
 .ai-fields {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .ai-field {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
 .field-label {
   font-size: 12px;
   color: #8fa9c8;
+  flex-shrink: 0;
+  width: 90px;
 }
 
 .field-value {
-  font-size: 12px;
+  font-size: 13px;
   color: #e8f3ff;
   font-weight: 500;
+  text-align: right;
+}
+
+.field-value-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  position: relative;
+}
+
+.field-value-wrap:hover .edit-hint {
+  opacity: 1;
+}
+
+.edit-hint {
+  font-size: 10px;
+  color: #5a7a9a;
+  opacity: 0;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.field-edit {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.edit-input {
+  width: 180px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(105, 227, 111, 0.3);
+  border-radius: 4px;
+  color: #e8f3ff;
+  font-size: 13px;
+  outline: none;
+  text-align: right;
+}
+
+.edit-input:focus {
+  border-color: #69e36f;
+}
+
+.link-like {
+  color: #2f9cff;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kpi-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-code {
+  padding: 2px 6px;
+  background: rgba(47, 156, 255, 0.15);
+  color: #2f9cff;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.confidence-field .field-value {
+  flex: 1;
+}
+
+.confidence-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.confidence-bar {
+  width: 100px;
+  height: 6px;
+  background: rgba(105, 227, 111, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #69e36f, #2f9cff);
+  border-radius: 3px;
+}
+
+.confidence-text {
+  font-size: 12px;
+  color: #69e36f;
+  font-weight: 600;
+  width: 40px;
+  text-align: right;
 }
 
 .duplicate-warning {
@@ -890,162 +1605,436 @@ function getQueueButtonAction(status: string): string {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
+  background: rgba(255, 179, 71, 0.08);
+  border: 1px solid rgba(255, 179, 71, 0.3);
   border-radius: 8px;
-  margin-top: 16px;
+  margin-top: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.duplicate-warning:hover {
+  background: rgba(255, 179, 71, 0.12);
 }
 
 .warning-icon {
-  color: #ff4f5e;
+  color: #ffb347;
+  flex-shrink: 0;
 }
 
 .warning-text {
-  font-size: 12px;
-  color: #ff4f5e;
+  font-size: 13px;
+  color: #ffb347;
   font-weight: 600;
 }
 
 .warning-count {
   font-size: 14px;
-  color: #ff4f5e;
+  color: #ffb347;
   font-weight: 700;
 }
 
-.warning-btn {
+.warning-btn-text {
   margin-left: auto;
-  padding: 4px 10px;
-  background: rgba(255, 79, 94, 0.15);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  border-radius: 4px;
-  color: #ff4f5e;
-  font-size: 11px;
-  cursor: pointer;
+  font-size: 12px;
+  color: #ffb347;
 }
 
-.ai-tip {
-  margin-top: 16px;
-  padding: 12px;
-  background: rgba(47, 156, 255, 0.1);
-  border: 1px solid rgba(47, 156, 255, 0.2);
+.rec-count {
+  font-size: 12px;
+  color: #5a7a9a;
+}
+
+.recommend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: visible;
+  flex: 0 0 auto;
+}
+
+.recommend-item {
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(105, 227, 111, 0.08);
   border-radius: 8px;
+  flex: 0 0 auto;
 }
 
-.tip-header {
+.basis-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recommend-file-name {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-}
-
-.tip-icon {
-  padding: 2px 6px;
-  background: linear-gradient(135deg, #69e36f, #2f9cff);
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #031020;
-}
-
-.tip-title {
-  font-size: 12px;
-  color: #2f9cff;
-  font-weight: 500;
-}
-
-.tip-content {
-  font-size: 11px;
-  color: #8fa9c8;
-  margin: 0;
-  line-height: 1.5;
-}
-
-.recommend-file {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 8px;
-}
-
-.recommend-file .file-icon {
-  color: #69e36f;
-}
-
-.recommend-file .file-name {
   font-size: 13px;
   color: #e8f3ff;
   font-weight: 500;
+  margin-bottom: 8px;
+  overflow: hidden;
 }
 
-.match-rate {
-  font-size: 11px;
+.recommend-file-name span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recommend-file-icon {
   color: #69e36f;
+  flex-shrink: 0;
 }
 
-.recommend-text {
-  font-size: 12px;
+.recommend-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.match-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid;
+  background: rgba(105, 227, 111, 0.08);
+}
+
+.reuse-count {
+  font-size: 11px;
   color: #8fa9c8;
-  margin-top: 12px;
+}
+
+.recommend-basis {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.basis-label {
+  font-size: 11px;
+  color: #5a7a9a;
+  flex-shrink: 0;
+}
+
+.basis-text {
+  font-size: 11px;
+  color: #8fa9c8;
 }
 
 .recommend-actions {
   display: flex;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 8px;
 }
 
-.recommend-actions .action-btn {
+.rec-btn {
   flex: 1;
-  padding: 10px;
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: rgba(105, 227, 111, 0.08);
+  border: 1px solid rgba(105, 227, 111, 0.2);
+  border-radius: 4px;
+  color: #8fa9c8;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.recommend-actions .action-btn.primary {
-  background: linear-gradient(135deg, #69e36f, #2f9cff);
-  color: #031020;
+.rec-btn:hover {
+  background: rgba(105, 227, 111, 0.15);
+  color: #69e36f;
+}
+
+.rec-btn.primary {
+  background: rgba(105, 227, 111, 0.2);
+  color: #69e36f;
   font-weight: 600;
-  border: none;
+  border: 1px solid #69e36f;
 }
 
-.bottom-actions {
+.rec-btn.ghost {
+  background: rgba(47, 156, 255, 0.08);
+  border-color: rgba(47, 156, 255, 0.25);
+  color: #7fb6ef;
+}
+
+.rec-btn.ghost:hover {
+  background: rgba(47, 156, 255, 0.16);
+  color: #9ec8f5;
+}
+
+.rec-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid rgba(105, 227, 111, 0.08);
+  flex-shrink: 0;
+}
+
+.rec-pagination-info {
+  font-size: 11px;
+  color: #5a7a9a;
+}
+
+.rec-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rec-page-btn {
+  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(105, 227, 111, 0.2);
+  border-radius: 3px;
+  color: #e8f3ff;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rec-page-btn:hover:not(:disabled) {
+  border-color: #69e36f;
+  color: #69e36f;
+}
+
+.rec-page-btn.active {
+  background: rgba(105, 227, 111, 0.2);
+  border-color: #69e36f;
+  color: #69e36f;
+}
+
+.rec-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: rgba(5, 26, 50, 0.98);
+  border: 1px solid rgba(105, 227, 111, 0.2);
+  border-radius: 10px;
+  width: 720px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e8f3ff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-title-icon {
+  color: #ffb347;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #8fa9c8;
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.modal-close:hover {
+  color: #e8f3ff;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.duplicate-compare {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.compare-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.compare-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 6px 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.new-label {
+  background: rgba(47, 156, 255, 0.15);
+  color: #2f9cff;
+  border: 1px solid rgba(47, 156, 255, 0.3);
+  border-bottom: none;
+}
+
+.existing-label {
+  background: rgba(166, 108, 255, 0.15);
+  color: #a66cff;
+  border: 1px solid rgba(166, 108, 255, 0.3);
+  border-bottom: none;
+}
+
+.compare-content {
+  flex: 1;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(105, 227, 111, 0.08);
+  border-radius: 0 0 6px 6px;
+}
+
+.compare-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
+  gap: 12px;
+}
+
+.compare-item:last-child {
+  border-bottom: none;
+}
+
+.compare-key {
+  font-size: 12px;
+  color: #8fa9c8;
+  flex-shrink: 0;
+}
+
+.compare-val {
+  font-size: 12px;
+  color: #e8f3ff;
+  text-align: right;
+  word-break: break-all;
+}
+
+.compare-val.hash {
+  font-family: monospace;
+  font-size: 11px;
+  color: #8fa9c8;
+}
+
+.compare-val.task-list {
+  color: #2f9cff;
+}
+
+.compare-vs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 80px;
+}
+
+.vs-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  background: rgba(255, 179, 71, 0.1);
+  border: 1px solid rgba(255, 179, 71, 0.3);
+  border-radius: 8px;
+}
+
+.vs-badge span {
+  font-size: 11px;
+  color: #ffb347;
+}
+
+.vs-badge strong {
+  font-size: 18px;
+  color: #ffb347;
+  font-weight: 700;
+}
+
+.modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding-top: 16px;
+  gap: 10px;
+  padding: 16px 20px;
   border-top: 1px solid rgba(105, 227, 111, 0.1);
-  margin-top: 16px;
 }
 
-.cancel-btn {
-  padding: 10px 24px;
+.modal-btn {
+  padding: 8px 18px;
   background: rgba(105, 227, 111, 0.08);
   border: 1px solid rgba(105, 227, 111, 0.2);
   border-radius: 6px;
   color: #8fa9c8;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
-.save-btn {
-  padding: 10px 24px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 6px;
+.modal-btn:hover {
+  background: rgba(105, 227, 111, 0.15);
   color: #69e36f;
-  font-size: 13px;
-  cursor: pointer;
 }
 
-.confirm-btn {
-  padding: 10px 24px;
+.modal-btn.primary {
   background: linear-gradient(135deg, #69e36f, #2f9cff);
-  border: none;
-  border-radius: 6px;
   color: #031020;
-  font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
+  border: none;
+}
+
+.modal-btn.secondary {
+  background: rgba(255, 79, 94, 0.08);
+  border-color: rgba(255, 79, 94, 0.2);
+  color: #ff8a96;
+}
+
+.modal-btn.secondary:hover {
+  background: rgba(255, 79, 94, 0.15);
 }
 </style>

@@ -2,12 +2,19 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import DashboardPage from '@/views/DashboardPage.vue'
 import WorkspacePage from '@/views/WorkspacePage.vue'
 import GisPreviewPage from '@/views/GisPreviewPage.vue'
+import MasterDashboardPage from '@/views/MasterDashboardPage.vue'
+import AssistantPage from '@/views/AssistantPage.vue'
 
 const routes = [
   {
     path: '/',
     name: 'dashboard',
     component: DashboardPage,
+  },
+  {
+    path: '/assistant',
+    name: 'assistant',
+    component: AssistantPage,
   },
   {
     path: '/workspace',
@@ -18,6 +25,11 @@ const routes = [
     path: '/gis-preview',
     name: 'gis-preview',
     component: GisPreviewPage,
+  },
+  {
+    path: '/ui-master/dashboard',
+    name: 'ui-master-dashboard',
+    component: MasterDashboardPage,
   },
 ]
 

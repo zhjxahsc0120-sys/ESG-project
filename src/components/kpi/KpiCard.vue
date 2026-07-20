@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { KpiItem, KpiTheme } from '@/types/dashboard'
 
 const props = defineProps<{
@@ -23,6 +24,8 @@ function formatValue(value: string | number) {
   return value
 }
 
+const isLongValue = computed(() => formatValue(props.item.value).length >= 5)
+
 function handleClick() {
   emit('select', props.item.key)
 }
@@ -30,13 +33,17 @@ function handleClick() {
 
 <template>
   <div
-    class="kpi-card" 
-    :class="{ 'kpi-card--multiline': item.label.length > 10 }"
-    :data-kpi-key="item.key" 
-    role="button" 
-    tabindex="0" 
-    @click="handleClick" 
-    @keydown.enter="handleClick" 
+    class="kpi-card"
+    :class="{
+      'kpi-card--multiline': item.label.length > 10,
+      'kpi-card--long-value': isLongValue,
+      'kpi-card--e04': item.key === 'E04',
+    }"
+    :data-kpi-key="item.key"
+    role="button"
+    tabindex="0"
+    @click="handleClick"
+    @keydown.enter="handleClick"
     @keydown.space.prevent="handleClick">
     <div class="kpi-label">{{ item.label }}</div>
     <div class="kpi-value-row">
@@ -102,6 +109,7 @@ function handleClick() {
     align-items: baseline;
     gap: 4px;
     justify-content: center;
+    min-width: 0;
 
     .kpi-value {
       font-family: var(--font-num);
@@ -109,6 +117,7 @@ function handleClick() {
       font-weight: 700;
       line-height: 1;
       text-shadow: 0 0 6px currentColor;
+      font-variant-numeric: tabular-nums;
     }
 
     .kpi-unit {
@@ -116,6 +125,28 @@ function handleClick() {
       color: var(--text-muted);
       font-weight: 400;
     }
+  }
+
+  &.kpi-card--long-value .kpi-value-row {
+    width: 100%;
+    box-sizing: border-box;
+    white-space: nowrap;
+
+    .kpi-value {
+      flex-shrink: 0;
+      font-size: 30px;
+      letter-spacing: -1px;
+    }
+
+    .kpi-unit {
+      flex-shrink: 0;
+      font-size: 12px;
+    }
+  }
+
+  &.kpi-card--e04 .kpi-label {
+    letter-spacing: -0.15px;
+    text-overflow: clip;
   }
 }
 </style>

@@ -10,6 +10,7 @@ import {
 import * as Cesium from "cesium";
 import TrafficLegend from "./TrafficLegend.vue";
 import FeatureCard from "./FeatureCard.vue";
+import BusinessLinksPanel from "./BusinessLinksPanel.vue";
 import LayerControl from "./LayerControl.vue";
 import MapChrome from "./MapChrome.vue";
 import { ViewerManager } from "../cesium/core/ViewerManager";
@@ -17,7 +18,7 @@ import { CameraManager } from "../cesium/core/CameraManager";
 import { LayerRegistry } from "../cesium/layers/LayerRegistry";
 import { BasemapManager } from "../cesium/layers/BasemapManager";
 import { SpatialAssetManager } from "../cesium/layers/SpatialAssetManager";
-import type { BasemapId } from "../config/basemaps.config";
+import { defaultBasemapId, type BasemapId } from "../config/basemaps.config";
 import {
   VectorLayerStore,
   parseGeoJson,
@@ -39,18 +40,27 @@ import {
   ShpTrafficAdapter,
 } from "../adapters";
 import type {
+  BusinessLinksResponse,
+  FeatureRelation,
+  GisBusinessLinkOpenPayload,
+  PresentationMode,
   TrafficGisOverviewProps,
   TrafficLayerDefinition,
   TrafficLayerStyle,
   TrafficMapContext,
   TrafficMapFeature,
 } from "../types";
+import { trafficGisConfig } from "../config/traffic-gis.config";
+
 const props = withDefaults(defineProps<TrafficGisOverviewProps>(), {
   showLegend: true,
   showModeSwitch: true,
+  showConfigButton: true,
   interactionEnabled: true,
   dataMode: "mock",
+  presentationMode: "preview" as PresentationMode,
 });
+
 const emit = defineEmits<{
   ready: [{ viewerReady: true }];
   featureClick: [TrafficMapFeature];
@@ -59,35 +69,46 @@ const emit = defineEmits<{
     { visibleFeatureCount: number; warningCount: number; offlineCount: number },
   ];
   error: [{ layerId?: string; message: string; recoverable: boolean }];
+  openKpiSource: [payload: GisBusinessLinkOpenPayload];
 }>();
+
 const root = ref<HTMLElement>();
 const canvas = ref<HTMLElement>();
 const loading = ref(true);
 const selected = ref<TrafficMapFeature | null>(null);
-const compassHeading=ref(0);
+const relationsData = ref<FeatureRelation[]>([]);
+const relationsLoading = ref(false);
+const businessLinksData = ref<BusinessLinksResponse | null>(null);
+const businessLinksLoading = ref(false);
+const businessLinksOpen = ref(false);
+const compassHeading = ref(0);
 const mode = ref<"all" | "risk" | "construction" | "environment">("all");
 const panelOpen = ref(false);
-const activeBasemap = ref<BasemapId>("dark");
+const activeBasemap = ref<BasemapId>(defaultBasemapId);
 const availableLayers = ref<TrafficLayerDefinition[]>([]);
 const visibleIds = ref<string[]>([]);
 const vectorLayers = ref<VectorLayerRecord[]>([]);
 const assets = ref<SpatialAssetRecord[]>([]);
+
 const vectorStore = new VectorLayerStore();
 const assetStore = new SpatialAssetStore();
 const manager = new ViewerManager();
 const registry = new LayerRegistry();
 const highlighter = new HighlightManager();
+
 let basemaps: BasemapManager | undefined;
 let spatialAssets: SpatialAssetManager | undefined;
 let camera: CameraManager | undefined;
 let picker: PickManager | undefined;
 let resizeObserver: ResizeObserver | undefined;
-let removeCameraChanged:(()=>void)|undefined;
+let removeCameraChanged: (() => void) | undefined;
 let loadVersion = 0;
+
 const pointRenderer = new PointRenderer();
 const lineRenderer = new PolylineRenderer();
 const polygonRenderer = new PolygonRenderer();
 const shpAdapter = new ShpTrafficAdapter();
+
 const adapter = computed(() =>
   props.dataMode === "api"
     ? new HttpTrafficAdapter()
@@ -95,7 +116,9 @@ const adapter = computed(() =>
       ? shpAdapter
       : new MockTrafficAdapter(),
 );
+
 const STYLE_STORAGE_KEY = "traffic-esg-business-layer-styles-v1";
+
 function savedStyles() {
   try {
     return JSON.parse(
@@ -105,26 +128,48 @@ function savedStyles() {
     return {};
   }
 }
+
 const context = (): TrafficMapContext => ({
   projectId: props.projectId,
   sectionId: props.sectionId,
   currentTime: props.currentTime,
   visibleLayerIds: visibleIds.value,
 });
-function modeAllows(layer:TrafficLayerDefinition){if(mode.value==='all')return true;if(props.dataMode!=='shp')return mode.value==='risk'?['risks','monitors'].includes(layer.id):mode.value==='construction'?['highway-main','work-zones'].includes(layer.id):true;const type=layer.objectType;return mode.value==='construction'?['road-section','spoil-site','chainage'].includes(type||''):mode.value==='environment'?['water-source','ecological-zone'].includes(type||''):mode.value==='risk'?type==='slope-monitor':true}
+
+function modeAllows(layer: TrafficLayerDefinition) {
+  if (mode.value === "all") return true;
+
+  const type = layer.objectType || "";
+
+  if (mode.value === "construction") {
+    return ["road-section", "spoil-site", "chainage"].includes(type);
+  }
+
+  if (mode.value === "environment") {
+    return ["water-source", "ecological-zone", "spoil-site"].includes(type);
+  }
+
+  if (mode.value === "risk") {
+    return ["slope-monitor", "risk-point"].includes(type);
+  }
+
+  return true;
+}
+
 async function renderLayer(
   layer: TrafficLayerDefinition,
   features: TrafficMapFeature[],
 ) {
   const viewer = manager.get();
   if (layer.geometryType === "point")
-    return pointRenderer.render(viewer, layer, features);
+    return pointRenderer.render(viewer, layer, features, props.presentationMode);
   if (layer.geometryType === "line")
-    return lineRenderer.render(viewer, layer, features);
+    return lineRenderer.render(viewer, layer, features, props.presentationMode);
   if (layer.geometryType === "polygon")
-    return polygonRenderer.render(viewer, layer, features);
+    return polygonRenderer.render(viewer, layer, features, props.presentationMode);
   return [];
 }
+
 async function loadDefinitions() {
   const layers = await adapter.value.getLayers({
     ...context(),
@@ -140,6 +185,7 @@ async function loadDefinitions() {
       ? [...props.visibleLayerIds]
       : layers.filter((l) => l.enabled).map((l) => l.id);
 }
+
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
@@ -155,7 +201,7 @@ async function load() {
     let layers = availableLayers.value.filter((l) =>
       visibleIds.value.includes(l.id),
     );
-    layers=layers.filter(modeAllows);
+    layers = layers.filter(modeAllows);
     let count = 0,
       warning = 0,
       offline = 0;
@@ -191,6 +237,7 @@ async function load() {
     if (version === loadVersion) loading.value = false;
   }
 }
+
 async function syncAssets() {
   try {
     await spatialAssets?.sync(assets.value);
@@ -204,11 +251,17 @@ async function syncAssets() {
     });
   }
 }
+
 async function switchBasemap(id: BasemapId) {
   try {
     basemaps?.switchTo(id);
     activeBasemap.value = id;
     await syncAssets();
+    selected.value = null;
+    relationsData.value = [];
+    businessLinksData.value = null;
+    businessLinksOpen.value = false;
+    await load();
   } catch (e) {
     emit("error", {
       message: e instanceof Error ? e.message : "底图切换失败",
@@ -216,12 +269,14 @@ async function switchBasemap(id: BasemapId) {
     });
   }
 }
+
 function toggleLayer(id: string, show: boolean) {
   visibleIds.value = show
     ? [...new Set([...visibleIds.value, id])]
     : visibleIds.value.filter((item) => item !== id);
   load();
 }
+
 async function styleLayer(id: string, style: Partial<TrafficLayerStyle>) {
   availableLayers.value = availableLayers.value.map((layer) =>
     layer.id === id ? { ...layer, style: { ...layer.style, ...style } } : layer,
@@ -233,6 +288,7 @@ async function styleLayer(id: string, style: Partial<TrafficLayerStyle>) {
   );
   await load();
 }
+
 async function addVector(file: File) {
   try {
     const record = parseGeoJson(
@@ -249,6 +305,7 @@ async function addVector(file: File) {
     });
   }
 }
+
 async function toggleVector(id: string, visible: boolean) {
   vectorLayers.value = vectorLayers.value.map((item) =>
     item.id === id ? { ...item, visible } : item,
@@ -256,6 +313,7 @@ async function toggleVector(id: string, visible: boolean) {
   vectorStore.save(vectorLayers.value);
   await load();
 }
+
 async function styleVector(id: string, style: Partial<TrafficLayerStyle>) {
   vectorLayers.value = vectorLayers.value.map((item) =>
     item.id === id
@@ -272,14 +330,17 @@ async function styleVector(id: string, style: Partial<TrafficLayerStyle>) {
   vectorStore.save(vectorLayers.value);
   await load();
 }
+
 async function removeVector(id: string) {
   registry.remove(id, manager.get());
   vectorLayers.value = vectorStore.remove(vectorLayers.value, id);
 }
+
 async function locateVector(id: string) {
   const entities = registry.get(id);
   if (entities.length) await camera?.flyTo(entities);
 }
+
 async function addAsset(input: {
   name: string;
   type: SpatialAssetType;
@@ -292,6 +353,7 @@ async function addAsset(input: {
   });
   await syncAssets();
 }
+
 async function toggleAsset(id: string, visible: boolean) {
   assets.value = assets.value.map((item) =>
     item.id === id ? { ...item, visible } : item,
@@ -299,43 +361,114 @@ async function toggleAsset(id: string, visible: boolean) {
   assetStore.save(assets.value);
   await syncAssets();
 }
+
 async function removeAsset(id: string) {
   assets.value = assetStore.remove(assets.value, id);
   await syncAssets();
 }
+
 async function locateAsset(id: string) {
   await spatialAssets?.locate(id);
 }
+
 async function refreshData() {
   availableLayers.value = [];
   await loadDefinitions();
   await load();
 }
+
 function featureOf(e: Cesium.Entity) {
   return e.properties?.trafficFeature?.getValue(Cesium.JulianDate.now()) as
     TrafficMapFeature | undefined;
 }
+
 function findEntity(id: string) {
   return registry.all().find((e) => featureOf(e)?.id === id);
 }
+
 async function flyToFeature(id: string) {
   const e = findEntity(id);
   if (e) await camera?.flyTo([e]);
 }
+
 async function flyToSection(sectionId: string) {
   const entities = registry
     .all()
     .filter((e) => featureOf(e)?.properties.sectionId === sectionId);
   if (entities.length) await camera?.flyTo(entities);
 }
+
 async function refreshLayer() {
   await refreshData();
 }
-function resetView() {
-  if(props.dataMode==='shp')camera?.flyToRectangle([109.52,24.39,109.83,24.52]);else camera?.reset(props.initialView);
+
+async function loadRelations() {
+  if (!selected.value) return;
+  const currentAdapter = adapter.value;
+  if (!("getRelations" in currentAdapter)) return;
+  relationsLoading.value = true;
+  try {
+    const res = await currentAdapter.getRelations(selected.value, context());
+    relationsData.value = res.items || [];
+    if (res.summary && selected.value) {
+      selected.value = { ...selected.value, relationSummary: res.summary };
+    }
+  } catch (e) {
+    emit("error", {
+      message: e instanceof Error ? e.message : "关联事项加载失败",
+      recoverable: true,
+    });
+  } finally {
+    relationsLoading.value = false;
+  }
 }
-function northUp(){const viewer=manager.get();viewer.camera.cancelFlight();viewer.camera.setView({orientation:{heading:0,pitch:viewer.camera.pitch,roll:0}});compassHeading.value=0}
+
+async function loadBusinessLinks() {
+  if (!selected.value) return;
+  const currentAdapter = adapter.value;
+  if (!("getBusinessLinks" in currentAdapter)) return;
+  businessLinksLoading.value = true;
+  businessLinksOpen.value = true;
+  businessLinksData.value = null;
+  try {
+    const res = await currentAdapter.getBusinessLinks(
+      selected.value,
+      context(),
+    );
+    businessLinksData.value = res;
+  } catch (e) {
+    emit("error", {
+      message: e instanceof Error ? e.message : "关联业务加载失败",
+      recoverable: true,
+    });
+  } finally {
+    businessLinksLoading.value = false;
+  }
+}
+
+function resetView() {
+  if (props.dataMode === "shp" || props.dataMode === "api") {
+    camera?.flyToRectangle(trafficGisConfig.projectRectangle);
+  } else {
+    camera?.reset(props.initialView);
+  }
+}
+
+function northUp() {
+  const viewer = manager.get();
+  viewer.camera.cancelFlight();
+  viewer.camera.setView({
+    orientation: {
+      heading: 0,
+      pitch: viewer.camera.pitch,
+      roll: 0,
+    },
+  });
+  compassHeading.value = 0;
+}
+
 defineExpose({ flyToFeature, flyToSection, refreshLayer, resetView });
+
 onMounted(async () => {
   await nextTick();
   const viewer = manager.create(canvas.value!);
@@ -345,7 +478,10 @@ onMounted(async () => {
   vectorLayers.value = vectorStore.load();
   assets.value = assetStore.load();
   camera = new CameraManager(viewer);
-  const updateHeading=()=>compassHeading.value=-Cesium.Math.toDegrees(viewer.camera.heading);updateHeading();removeCameraChanged=viewer.camera.changed.addEventListener(updateHeading);
+  const updateHeading = () =>
+    compassHeading.value = -Cesium.Math.toDegrees(viewer.camera.heading);
+  updateHeading();
+  removeCameraChanged = viewer.camera.changed.addEventListener(updateHeading);
   camera.reset(props.initialView);
   if (props.interactionEnabled) {
     picker = new PickManager(viewer);
@@ -353,6 +489,9 @@ onMounted(async () => {
       (f, e) => {
         highlighter.select(e);
         selected.value = f;
+        relationsData.value = [];
+        businessLinksData.value = null;
+        businessLinksOpen.value = false;
         emit("featureClick", f);
         if (f.objectType === "road-section") void flyToFeature(f.id);
       },
@@ -364,11 +503,15 @@ onMounted(async () => {
   await syncAssets();
   await loadDefinitions();
   await load();
-  if (props.dataMode === "shp" && !props.sectionId) {
-    camera.flyToRectangle([109.52,24.39,109.83,24.52]);
+  if (
+    (props.dataMode === "shp" || props.dataMode === "api") &&
+    !props.sectionId
+  ) {
+    camera.flyToRectangle(trafficGisConfig.projectRectangle);
   }
   emit("ready", { viewerReady: true });
 });
+
 onBeforeUnmount(() => {
   loadVersion++;
   resizeObserver?.disconnect();
@@ -379,6 +522,7 @@ onBeforeUnmount(() => {
   registry.clear(manager.get());
   manager.destroy();
 });
+
 watch(
   () => props.sectionId,
   async (sectionId) => {
@@ -388,6 +532,7 @@ watch(
     else resetView();
   },
 );
+
 watch(
   () => [props.currentTime, props.dataMode],
   async () => {
@@ -396,6 +541,7 @@ watch(
   },
   { deep: true },
 );
+
 watch(
   () => props.visibleLayerIds,
   (ids) => {
@@ -406,34 +552,61 @@ watch(
   },
   { deep: true },
 );
+
 watch(
   () => props.selectedFeatureId,
   (id) => {
     if (id) flyToFeature(id);
   },
 );
+
 watch(mode, load);
+
+function handleOpenKpiSource(payload: GisBusinessLinkOpenPayload) {
+  emit('openKpiSource', {
+    ...payload,
+    gisFeatureId: payload.gisFeatureId || selected.value?.id,
+  });
+}
 </script>
+
 <template>
   <div ref="root" class="traffic-gis-overview">
     <div ref="canvas" class="traffic-gis-overview__canvas"></div>
-    <MapChrome :mode="mode" :config-open="panelOpen" :heading="compassHeading" @mode-change="mode=$event" @reset="resetView" @north="northUp" @config="panelOpen=!panelOpen" />
+    <MapChrome
+      :mode="mode"
+      :config-open="panelOpen"
+      :heading="compassHeading"
+      :show-config-button="showConfigButton"
+      :presentation-mode="presentationMode"
+      @mode-change="mode = $event"
+      @reset="resetView"
+      @north="northUp"
+      @config="panelOpen = !panelOpen"
+    />
     <div class="traffic-gis-overview__top">
-      <div><b>GIS 地图主视角</b><span>空间态势 · 交通 · ESG</span></div>
+      <div>
+        <b>GIS 地图主视角</b>
+        <span>空间态势 · 交通 · ESG</span>
+      </div>
       <TrafficLegend v-if="showLegend" />
     </div>
     <nav v-if="showModeSwitch">
       <button :class="{ active: mode === 'all' }" @click="mode = 'all'">
-        全线</button
-      ><button
+        全线
+      </button>
+      <button
         :class="{ active: mode === 'construction' }"
         @click="mode = 'construction'"
       >
-        施工</button
-      ><button :class="{ active: mode === 'risk' }" @click="mode = 'risk'">
-        风险</button
-      ><button @click="resetView">复位</button
-      ><button
+        施工
+      </button>
+      <button :class="{ active: mode === 'risk' }" @click="mode = 'risk'">
+        风险
+      </button>
+      <button @click="resetView">复位</button>
+      <button
+        v-if="showConfigButton"
         class="layer-button"
         :class="{ active: panelOpen }"
         @click="panelOpen = !panelOpen"
@@ -463,11 +636,27 @@ watch(mode, load);
       @asset-remove="removeAsset"
       @asset-locate="locateAsset"
       @refresh="refreshData"
-    /><FeatureCard
+    />
+    <FeatureCard
       v-if="selected"
       class="traffic-gis-overview__detail"
       :feature="selected"
-      @close="selected=null"
+      :presentation-mode="presentationMode"
+      :relations="relationsData"
+      :relations-loading="relationsLoading"
+      @close="selected = null"
+      @load-relations="loadRelations"
+      @load-business-links="loadBusinessLinks"
+    />
+    <BusinessLinksPanel
+      v-if="selected && businessLinksOpen"
+      class="traffic-gis-overview__business-links"
+      :data="businessLinksData"
+      :loading="businessLinksLoading"
+      :feature-name="selected.name"
+      :presentation-mode="presentationMode"
+      @close="businessLinksOpen = false"
+      @open-kpi-source="handleOpenKpiSource"
     />
     <div v-if="loading" class="traffic-gis-overview__loading">
       业务图层加载中…
@@ -483,6 +672,7 @@ watch(mode, load);
     </div>
   </div>
 </template>
+
 <style scoped>
 .traffic-gis-overview {
   position: relative;
@@ -507,7 +697,10 @@ watch(mode, load);
   justify-content: space-between;
   pointer-events: none;
 }
-.traffic-gis-overview>.traffic-gis-overview__top,.traffic-gis-overview>nav{display:none!important}
+.traffic-gis-overview > .traffic-gis-overview__top,
+.traffic-gis-overview > nav {
+  display: none !important;
+}
 .traffic-gis-overview__top > div:first-child {
   padding: 8px 12px;
   background: rgba(4, 24, 48, 0.82);
@@ -555,7 +748,19 @@ watch(mode, load);
   position: absolute;
   right: 18px;
   bottom: 14px;
-  z-index:10;
+  z-index: 10;
+  max-width: calc(100% - 36px);
+  max-height: calc(100% - 120px);
+  overflow: hidden;
+}
+/* 关联业务侧浮层：限制在 GIS 面板内部右下角，不遮挡右侧专题和底部时间轴 */
+.traffic-gis-overview__business-links {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 11;
+  max-width: calc(100% - 36px);
+  max-height: calc(100% - 120px);
 }
 .traffic-gis-overview__loading {
   position: absolute;
@@ -583,6 +788,9 @@ watch(mode, load);
     display: none;
   }
   .traffic-gis-overview__detail {
+    right: 14px;
+  }
+  .traffic-gis-overview__business-links {
     right: 14px;
   }
   .traffic-gis-overview nav {

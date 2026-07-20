@@ -1,4 +1,5 @@
-import type { KpiDetailConfig } from '@/types/dashboard'
+import type { KpiDetailConfig, KpiGroup } from '@/types/dashboard'
+import type { MonthlyReadiness, MonthlyReportOverview } from '@/types/monthly-report'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
 
@@ -29,11 +30,22 @@ export async function getDashboardKpiDetail(key: string): Promise<KpiDetailConfi
 }
 
 export async function getDashboardTopic(topic: 'carbon' | 'monthly-report'): Promise<KpiDetailConfig | null> {
-  return apiGet(`/api/dashboard/topics/${topic}`)
+  return apiGet(topic === 'carbon' ? '/api/carbon/benefit-overview' : `/api/dashboard/topics/${topic}`)
 }
 
 export async function getDashboardPanels(): Promise<DashboardPanels | null> {
   return apiGet('/api/dashboard/panels')
+}
+
+export async function getMonthlyReportReadiness(reportPeriod: string): Promise<MonthlyReadiness | null> {
+  const params = new URLSearchParams({ reportPeriod })
+  return apiGet<MonthlyReadiness>(`/api/monthly-report/readiness?${params.toString()}`)
+}
+
+// Codex 已完成的新版月报概览接口：MySQL → 服务端 JSON 契约快照 → 前端 Mock
+export async function getMonthlyReportOverview(reportMonth: string): Promise<MonthlyReportOverview | null> {
+  const params = new URLSearchParams({ reportMonth })
+  return apiGet<MonthlyReportOverview>(`/api/monthly/report-overview?${params.toString()}`)
 }
 
 export async function getWorkspaceSummary(): Promise<WorkspaceSummary | null> {
@@ -223,20 +235,6 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T | null> {
   }
 }
 
-type KpiGroup = {
-  key: 'E' | 'S' | 'G'
-  title: string
-  theme: string
-  status: string
-  items: {
-    key: string
-    label: string
-    fullName: string
-    value: number
-    unit: string
-  }[]
-}
-
 type S01Data = {
   projectStartDate: string
   currentDate: string
@@ -244,6 +242,8 @@ type S01Data = {
   currentStage: string
   currentStageDetail: string
   countingStatus: string
+  latestInterruptDate?: string
+  latestInterruptReason?: string
   updateTime: string
   timeline: {
     startLabel: string
@@ -258,6 +258,8 @@ type S01Data = {
     name: string
     status: string
     detail?: string
+    startDate?: string
+    endDate?: string
   }[]
   conclusion: string
 }

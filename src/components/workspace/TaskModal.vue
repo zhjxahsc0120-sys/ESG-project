@@ -66,7 +66,7 @@ const currentTask = computed(() => apiTask.value || props.task)
 
 const defaultTab = computed(() => {
   if (currentTask.value.status === '待上传') return '资料要求'
-  if (currentTask.value.status === '待补正' || currentTask.value.status === '审核退回') return '校验问题'
+  if (currentTask.value.status === '待补正' || currentTask.value.status === '已退回') return '校验问题'
   if (currentTask.value.status === '待提交') return '已关联资料'
   return '资料要求'
 })
