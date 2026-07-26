@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Search, Upload, Link2 } from 'lucide-vue-next'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { Search, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { allUploadTasks, taskStatusCards as mockTaskStatusCards } from '@/data/workspace.mock'
 import { getWorkspaceSummary, getWorkspaceTasks } from '@/services/api'
 import type { UploadTask, StatusCard } from '@/types/workspace'
@@ -150,6 +150,37 @@ const filteredTasks = computed(() => {
 
 const selectedCount = computed(() => selectedIds.value.length)
 
+const currentPage = ref(1)
+const pageSize = 10
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / pageSize)))
+
+const paginatedTasks = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filteredTasks.value.slice(start, start + pageSize)
+})
+
+watch(filteredTasks, () => {
+  currentPage.value = 1
+})
+
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+}
+
+function getPageNumbers() {
+  const pages: number[] = []
+  const maxPages = 5
+  let start = Math.max(1, currentPage.value - Math.floor(maxPages / 2))
+  let end = Math.min(totalPages.value, start + maxPages - 1)
+  if (end - start + 1 < maxPages) {
+    start = Math.max(1, end - maxPages + 1)
+  }
+  for (let i = start; i <= end; i++) pages.push(i)
+  return pages
+}
+
 const canBatchSubmit = computed(() => {
   return selectedIds.value.length > 0 && selectedIds.value.every(id => {
     const task = taskList.value.find(t => t.id === id)
@@ -279,352 +310,199 @@ function isSelected(taskId: string) {
 </script>
 
 <template>
-  <div class="workspace-tasks">
-    <div class="page-header">
-      <div class="page-title">我的上传任务</div>
-    </div>
-
-    <div class="status-cards">
+  <div class="workspace-tasks ws-page">
+    <div class="ws-status-cards cols-6">
       <div
         v-for="card in statusCards"
         :key="card.label"
-        class="status-card"
+        class="ws-status-card"
         :class="{ active: selectedStatus === card.label }"
         :style="{ '--accent-color': card.color }"
         @click="handleStatusCardClick(card.label)"
       >
-        <div class="card-icon">
-          <Upload v-if="card.label === '待上传'" :size="20" />
-          <Filter v-else-if="card.label === '待补正'" :size="20" />
-          <Link2 v-else-if="card.label === '待提交'" :size="20" />
-          <Calendar v-else-if="card.label === '审核中'" :size="20" />
+        <div class="ws-card-label">{{ card.label }}</div>
+        <div class="ws-card-value-row">
+          <span class="ws-card-value">{{ card.value }}</span>
+          <span class="ws-card-unit">{{ card.unit }}</span>
         </div>
-        <div class="card-label">{{ card.label }}</div>
-        <div class="card-value">{{ card.value }}</div>
-        <div class="card-unit">{{ card.unit }}</div>
       </div>
     </div>
 
-    <div class="filter-section">
-      <div class="ai-search-header">
-        <span class="ai-search-title">ESG智能助手</span>
-        <button v-if="hasSearch" class="clear-search-btn" @click="handleClearSearch">清除搜索</button>
+    <div class="ws-filter-bar">
+      <div class="ws-filter-row filter-search-row">
+        <span class="ws-filter-title">任务检索</span>
+        <div class="ws-search-box search-main">
+          <Search :size="16" />
+          <input
+            v-model="searchKeyword"
+            type="text"
+            placeholder="询问待办任务、缺失资料、截止时间或任务状态"
+            @keyup.enter="handleAiSearch"
+          />
+          <button class="ws-btn ws-btn-primary ws-btn-sm" @click="handleAiSearch">搜索</button>
+        </div>
+        <button v-if="hasSearch" class="ws-btn ws-btn-danger ws-btn-sm" @click="handleClearSearch">清除搜索</button>
       </div>
-      <div class="ai-search-box">
-        <Search :size="16" />
-        <input 
-          v-model="searchKeyword" 
-          type="text" 
-          placeholder="询问待办任务、缺失资料、截止时间或任务状态" 
-          @keyup.enter="handleAiSearch"
-        />
-        <button class="search-btn" @click="handleAiSearch">搜索</button>
-      </div>
-      <div class="filter-controls">
-        <select v-model="filterModule" class="filter-select" @change="handleAiSearch">
+      <div class="ws-filter-row">
+        <select v-model="filterModule" class="ws-select" @change="handleAiSearch">
           <option value="">全部模块</option>
           <option value="E">E-环境环保</option>
           <option value="S">S-社会责任</option>
           <option value="G">G-公司治理</option>
         </select>
-        <input v-model="filterCycle" type="text" class="filter-input" placeholder="资料周期" @keyup.enter="handleAiSearch" />
-        <select v-model="filterCycleType" class="filter-select" @change="handleAiSearch">
+        <input v-model="filterCycle" type="text" class="ws-input" placeholder="资料周期" @keyup.enter="handleAiSearch" />
+        <select v-model="filterCycleType" class="ws-select" @change="handleAiSearch">
           <option value="">周期类型</option>
           <option value="MONTHLY">月度</option>
           <option value="QUARTERLY">季度</option>
           <option value="ANNUAL">年度</option>
         </select>
-        <input v-model="filterDeadlineStart" type="date" class="filter-input" @change="handleAiSearch" />
-        <input v-model="filterDeadlineEnd" type="date" class="filter-input" @change="handleAiSearch" />
-        <input v-model="filterAssignee" type="text" class="filter-input" placeholder="经办人" @keyup.enter="handleAiSearch" />
+        <input v-model="filterDeadlineStart" type="date" class="ws-input" @change="handleAiSearch" />
+        <input v-model="filterDeadlineEnd" type="date" class="ws-input" @change="handleAiSearch" />
+        <input v-model="filterAssignee" type="text" class="ws-input" placeholder="经办人" @keyup.enter="handleAiSearch" />
       </div>
       <div v-if="hasSearch" class="search-result-hint">{{ searchResultHint }}</div>
-      <div v-if="!hasSearch" class="search-examples">
-        <span class="example-label">输入示例：</span>
-        <span class="example-item">哪些任务已经逾期？</span>
-        <span class="example-item">本周需要上传哪些资料？</span>
-        <span class="example-item">有哪些任务被审核退回？</span>
-        <span class="example-item">哪些任务还需要补正？</span>
-        <span class="example-item">显示E组本月待上传任务</span>
-      </div>
     </div>
 
-    <div class="batch-section">
+    <div class="batch-section ws-panel">
       <div class="batch-info">
         <label class="select-all">
           <input type="checkbox" :checked="selectedCount === filteredTasks.length && filteredTasks.length > 0" @change="toggleSelectAll" />
           已选择 {{ selectedCount }} 项
         </label>
-        <button class="clear-btn" v-if="selectedCount > 0" @click="selectedIds = []">清空</button>
+        <button class="ws-btn ws-btn-danger ws-btn-sm" v-if="selectedCount > 0" @click="selectedIds = []">清空</button>
       </div>
       <div class="batch-actions">
-        <button class="batch-btn" @click="handleBatchLink">批量关联资料</button>
-        <button class="batch-btn" :class="{ disabled: !canBatchSubmit }" :disabled="!canBatchSubmit">
+        <button class="ws-btn ws-btn-secondary" @click="handleBatchLink">批量关联资料</button>
+        <button class="ws-btn ws-btn-primary" :class="{ disabled: !canBatchSubmit }" :disabled="!canBatchSubmit">
           批量提交（条件不满足）
         </button>
       </div>
     </div>
 
-    <div class="tasks-table-wrapper">
-      <table class="tasks-table">
-        <thead>
-          <tr>
-            <th class="checkbox-col">
-              <input type="checkbox" :checked="selectedCount === filteredTasks.length && filteredTasks.length > 0" @change="toggleSelectAll" />
-            </th>
-            <th>任务名称</th>
-            <th>ESG模块</th>
-            <th>资料周期</th>
-            <th>截止时间</th>
-            <th>资料进度</th>
-            <th>当前状态</th>
-            <th>下一步</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="task in filteredTasks"
-            :key="task.id"
-            :class="{ selected: isSelected(task.id) }"
-            @click="emit('openTask', task.id)"
-          >
-            <td class="checkbox-col">
-              <input type="checkbox" :checked="isSelected(task.id)" @click.stop="toggleSelect(task.id)" />
-            </td>
-            <td class="task-name">{{ task.name }}</td>
-            <td>
-              <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
-                {{ task.module }} {{ task.moduleName }}
-              </span>
-            </td>
-            <td>{{ task.cycle }}</td>
-            <td :class="{ 'overdue': task.daysOverdue }">{{ task.deadlineDisplay }}</td>
-            <td>
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
-              </div>
-              <span class="progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
-            </td>
-            <td>
-              <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
-                {{ task.status }}
-              </span>
-            </td>
-            <td>
-              <button class="next-step-btn" @click.stop="emit('openTask', task.id)">
-                {{ task.nextStep }}
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <div class="tasks-table-section ws-panel">
+      <div class="ws-panel-header">
+        <div class="ws-panel-title">我的上传任务</div>
+      </div>
+      <div class="ws-table-container tasks-table">
+        <div class="ws-table-scroll no-scroll">
+          <table class="ws-table">
+            <colgroup>
+              <col class="col-check" />
+              <col class="col-task-name" />
+              <col class="col-module" />
+              <col class="col-deadline" />
+              <col class="col-progress" />
+              <col class="col-status" />
+              <col class="col-next" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="col-check checkbox-col">
+                  <input type="checkbox" :checked="selectedCount === filteredTasks.length && filteredTasks.length > 0" @change="toggleSelectAll" />
+                </th>
+                <th class="col-task-name">任务名称</th>
+                <th class="col-module">ESG模块</th>
+                <th class="col-deadline">截止时间</th>
+                <th class="col-progress">资料进度</th>
+                <th class="col-status">状态</th>
+                <th class="col-next">下一步</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="task in paginatedTasks"
+                :key="task.id"
+                :class="{ selected: isSelected(task.id) }"
+                @click="emit('openTask', task.id)"
+              >
+                <td class="col-check checkbox-col">
+                  <input type="checkbox" :checked="isSelected(task.id)" @click.stop="toggleSelect(task.id)" />
+                </td>
+                <td class="col-task-name task-name">{{ task.name }}</td>
+                <td class="col-module">
+                  <span class="module-tag" :style="{ background: `${getModuleColor(task.module)}20`, color: getModuleColor(task.module) }">
+                    {{ task.module }} {{ task.moduleName }}
+                  </span>
+                </td>
+                <td class="col-deadline" :class="{ overdue: task.daysOverdue }">{{ task.deadlineDisplay }}</td>
+                <td class="col-progress">
+                  <div class="ws-progress">
+                    <div class="ws-progress-bar">
+                      <div class="ws-progress-fill" :style="{ width: `${(task.progressCurrent / task.progressTotal) * 100}%` }"></div>
+                    </div>
+                    <span class="ws-progress-text">{{ task.progressCurrent }}/{{ task.progressTotal }}</span>
+                  </div>
+                </td>
+                <td class="col-status">
+                  <span class="status-tag" :style="{ background: `${getStatusColor(task.status)}20`, color: getStatusColor(task.status) }">
+                    {{ task.status }}
+                  </span>
+                </td>
+                <td class="col-next">
+                  <button class="ws-btn ws-btn-action ws-btn-sm" @click.stop="emit('openTask', task.id)">
+                    {{ task.nextStep }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-    <div class="pagination">
-      <button class="prev-btn">‹</button>
-      <span class="current-page">1</span>
-      <button class="next-btn">›</button>
-      <span class="page-size">10 条/页</span>
-      <span class="total-count">共 {{ filteredTasks.length }} 条</span>
+      <div class="ws-pagination-bar">
+        <div class="ws-pagination-info">共 <span class="highlight">{{ filteredTasks.length }}</span> 项，每页 {{ pageSize }} 项</div>
+        <div class="ws-pagination-controls">
+          <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
+            <ChevronLeft :size="14" />
+          </button>
+          <button
+            v-for="p in getPageNumbers()"
+            :key="p"
+            class="ws-page-btn"
+            :class="{ active: currentPage === p }"
+            @click="goToPage(p)"
+          >
+            {{ p }}
+          </button>
+          <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
+            <ChevronRight :size="14" />
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .workspace-tasks {
-  padding: 20px;
-  height: calc(100% - 120px);
-  overflow-y: auto;
+  min-height: 0;
 }
 
-.page-header {
-  margin-bottom: 20px;
+.filter-search-row {
+  flex-wrap: nowrap;
 }
 
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #e8f3ff;
-}
-
-.status-cards {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.status-card {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  text-align: center;
-}
-
-.status-card:hover {
-  border-color: var(--accent-color);
-}
-
-.status-card.active {
-  border-color: var(--accent-color);
-  background: rgba(105, 227, 111, 0.08);
-}
-
-.card-icon {
-  color: var(--accent-color);
-  margin-bottom: 6px;
-}
-
-.card-label {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.card-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--accent-color);
-}
-
-.card-unit {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.filter-section {
-  background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-.ai-search-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.ai-search-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #69e36f;
-}
-
-.clear-search-btn {
-  padding: 4px 10px;
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  border-radius: 4px;
-  color: #ff4f5e;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.ai-search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 6px;
-  padding: 8px 12px;
-}
-
-.ai-search-box input {
+.search-main {
   flex: 1;
-  background: transparent;
-  border: none;
-  color: #e8f3ff;
-  font-size: 12px;
-  outline: none;
+  min-width: 0;
 }
 
-.ai-search-box input::placeholder {
-  color: #5a7a9a;
-}
-
-.search-btn {
-  padding: 6px 14px;
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border: none;
-  border-radius: 4px;
-  color: #031020;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-
-  &:active {
-    transform: scale(0.97);
-    transition-duration: 0.08s;
-  }
-}
-
-.filter-controls {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
-.filter-select,
-.filter-input {
-  padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(143, 169, 200, 0.2);
-  border-radius: 4px;
-  color: #e8f3ff;
-  font-size: 12px;
-  outline: none;
-  min-width: 100px;
-}
-
-.filter-select option,
-.filter-input::placeholder {
-  color: #5a7a9a;
+.search-main .ws-btn {
+  flex-shrink: 0;
 }
 
 .search-result-hint {
   font-size: 11px;
   color: #69e36f;
-  margin-top: 8px;
-}
-
-.search-examples {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.example-label {
-  font-size: 11px;
-  color: #5a7a9a;
-}
-
-.example-item {
-  font-size: 11px;
-  color: #8fa9c8;
-  padding: 2px 8px;
-  background: rgba(105, 227, 111, 0.05);
-  border-radius: 4px;
 }
 
 .batch-section {
-  display: flex;
+  flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  flex-shrink: 0;
+  padding: 8px 12px;
 }
 
 .batch-info {
@@ -642,157 +520,45 @@ function isSelected(taskId: string) {
   cursor: pointer;
 }
 
-.clear-btn {
-  padding: 4px 10px;
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid rgba(255, 79, 94, 0.3);
-  border-radius: 4px;
-  color: #ff4f5e;
-  font-size: 11px;
-  cursor: pointer;
-}
-
 .batch-actions {
   display: flex;
   gap: 10px;
 }
 
-.batch-btn {
-  padding: 8px 16px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 4px;
-  color: #69e36f;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.batch-btn.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.tasks-table-wrapper {
-  overflow-x: auto;
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
+.tasks-table-section {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .tasks-table {
-  width: 100%;
-  border-collapse: collapse;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.tasks-table th {
-  text-align: left;
-  padding: 12px 16px;
-  font-size: 12px;
-  color: #8fa9c8;
-  font-weight: 500;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
+.tasks-table-section > .ws-pagination-bar {
+  border: 1px solid rgba(47, 156, 255, 0.14);
+  border-radius: 0 0 8px 8px;
 }
 
 .checkbox-col {
   width: 40px;
-}
-
-.task-row {
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.task-row:hover {
-  background: rgba(105, 227, 111, 0.05);
-}
-
-.task-row.selected {
-  background: rgba(105, 227, 111, 0.1);
-}
-
-.task-row td {
-  padding: 14px 16px;
-  font-size: 13px;
-  color: #e8f3ff;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
+  text-align: center;
 }
 
 .task-name {
   font-weight: 500;
 }
 
-.module-tag, .status-tag {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.progress-bar {
-  width: 80px;
-  height: 6px;
-  background: rgba(105, 227, 111, 0.1);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #69e36f, #2f9cff);
-  border-radius: 3px;
-}
-
-.progress-text {
-  margin-left: 10px;
-  font-size: 12px;
-  color: #8fa9c8;
-}
-
-.next-step-btn {
-  padding: 6px 14px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 4px;
-  color: #69e36f;
-  font-size: 12px;
-  cursor: pointer;
-}
-
 .overdue {
   color: #ff4f5e;
 }
 
-.pagination {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-}
-
-.prev-btn, .next-btn {
-  width: 28px;
-  height: 28px;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.current-page {
-  padding: 6px 12px;
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border-radius: 4px;
-  color: #031020;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.page-size, .total-count {
-  font-size: 12px;
-  color: #8fa9c8;
+.ws-btn.disabled,
+.ws-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

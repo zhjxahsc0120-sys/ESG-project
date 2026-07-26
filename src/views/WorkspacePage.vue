@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import HeaderNav from '@/components/layout/HeaderNav.vue'
 import WorkspaceNav from '@/components/workspace/WorkspaceNav.vue'
@@ -11,9 +11,37 @@ import WorkspaceDocuments from '@/components/workspace/WorkspaceDocuments.vue'
 import TaskModal from '@/components/workspace/TaskModal.vue'
 import { uploadTasks } from '@/data/workspace.mock'
 import type { UploadTask } from '@/types/workspace'
+import '@/styles/workspace.scss'
+
+const SCREEN_WIDTH = 1920
+const SCREEN_HEIGHT = 1080
 
 const route = useRoute()
 const router = useRouter()
+
+const windowWidth = ref(SCREEN_WIDTH)
+const windowHeight = ref(SCREEN_HEIGHT)
+
+const scale = computed(() => {
+  const scaleX = windowWidth.value / SCREEN_WIDTH
+  const scaleY = windowHeight.value / SCREEN_HEIGHT
+  return Math.min(scaleX, scaleY)
+})
+
+const translateX = computed(() => {
+  const scaledWidth = SCREEN_WIDTH * scale.value
+  return (windowWidth.value - scaledWidth) / 2
+})
+
+const translateY = computed(() => {
+  const scaledHeight = SCREEN_HEIGHT * scale.value
+  return (windowHeight.value - scaledHeight) / 2
+})
+
+function handleResize() {
+  windowWidth.value = window.innerWidth
+  windowHeight.value = window.innerHeight
+}
 
 const activeNav = ref('workspace')
 const selectedStatus = ref('')
@@ -80,65 +108,103 @@ function handlePlatformNav(key: string) {
 watch(() => route.query.t, () => {
   syncTabFromQuery()
 })
+
+onMounted(() => {
+  handleResize()
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 </script>
 
 <template>
-  <div class="workspace-page">
-    <!-- 平台统一 HeaderNav（80px） -->
-    <div class="workspace-header-nav">
-      <HeaderNav active-key="workspace" @navigate="handlePlatformNav" />
+  <div class="screen-wrapper">
+    <div
+      class="screen-canvas"
+      :style="{
+        transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
+      }"
+    >
+      <div class="workspace-page">
+        <!-- 与 Dashboard/Assistant 同壳：1920×1080 + scale，HeaderNav 像素级一致 -->
+        <div class="workspace-header-nav">
+          <HeaderNav active-key="workspace" @navigate="handlePlatformNav" />
+        </div>
+
+        <!-- 二级 Tab：保持在红框下方，不并入 HeaderNav -->
+        <WorkspaceNav :active-nav="activeNav" @navigate="handleNavigate" />
+
+        <main class="workspace-main">
+          <WorkspaceHome
+            v-if="activeNav === 'workspace'"
+            @navigate="handleNavigate"
+            @open-task="handleOpenTask"
+          />
+          <WorkspaceTasks
+            v-else-if="activeNav === 'tasks'"
+            :initial-status="selectedStatus"
+            @open-task="handleOpenTask"
+          />
+          <WorkspaceSmartUpload
+            v-else-if="activeNav === 'smart-upload'"
+          />
+          <WorkspaceReview
+            v-else-if="activeNav === 'review'"
+            @open-task="handleOpenTask"
+          />
+          <WorkspaceDocuments
+            v-else-if="activeNav === 'documents'"
+          />
+        </main>
+
+        <TaskModal
+          v-if="currentTask"
+          :task="currentTask"
+          :force-tab="forceTab"
+          @close="handleCloseModal"
+        />
+      </div>
     </div>
-
-    <!-- 二级 Tab -->
-    <WorkspaceNav :active-nav="activeNav" @navigate="handleNavigate" />
-
-    <main class="workspace-main">
-      <WorkspaceHome
-        v-if="activeNav === 'workspace'"
-        @navigate="handleNavigate"
-        @open-task="handleOpenTask"
-      />
-      <WorkspaceTasks
-        v-else-if="activeNav === 'tasks'"
-        :initial-status="selectedStatus"
-        @open-task="handleOpenTask"
-      />
-      <WorkspaceSmartUpload
-        v-else-if="activeNav === 'smart-upload'"
-      />
-      <WorkspaceReview
-        v-else-if="activeNav === 'review'"
-        @open-task="handleOpenTask"
-      />
-      <WorkspaceDocuments
-        v-else-if="activeNav === 'documents'"
-      />
-    </main>
-
-    <TaskModal
-      v-if="currentTask"
-      :task="currentTask"
-      :force-tab="forceTab"
-      @close="handleCloseModal"
-    />
   </div>
 </template>
 
 <style scoped>
+.screen-wrapper {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #020b18;
+}
+
+.screen-canvas {
+  width: 1920px;
+  height: 1080px;
+  transform-origin: top left;
+  will-change: transform;
+}
+
 .workspace-page {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* 与 .dashboard-page / .assistant-page 同壳：顶栏外 padding + 与下方内容间距 */
+  padding: var(--main-gap);
+  gap: var(--main-gap);
   background: linear-gradient(180deg, #020b18 0%, #051a32 100%);
+  overflow: hidden;
 }
 
 .workspace-header-nav {
   height: var(--dashboard-header-h, 80px);
-  flex: 0 0 var(--dashboard-header-h, 80px);
+  flex-shrink: 0;
 }
 
 .workspace-main {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 </style>

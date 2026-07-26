@@ -11,7 +11,7 @@ const navItems = [
   { key: 'workspace', label: '填报概览' },
   { key: 'tasks', label: '我的上传任务' },
   { key: 'smart-upload', label: 'ESG智能入库' },
-  { key: 'review', label: '审核结果' },
+  { key: 'review', label: '审核管理' },
   { key: 'documents', label: '资料中心与档案' },
 ]
 
@@ -36,15 +36,17 @@ function handleNavClick(key: string) {
 <style scoped>
 .workspace-nav {
   display: flex;
+  flex-shrink: 0;
   background: rgba(0, 0, 0, 0.3);
-  padding: 0 24px;
-  border-bottom: 1px solid rgba(47, 156, 255, 0.12);
+  padding: 0 8px;
+  border: 1px solid rgba(47, 156, 255, 0.12);
+  border-radius: 8px;
 }
 
 .nav-item {
   flex: 1;
-  max-width: 180px;
-  padding: 14px 12px;
+  max-width: 200px;
+  padding: 8px 12px;
   border: none;
   background: transparent;
   color: #8fa9c8;

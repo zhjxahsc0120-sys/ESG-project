@@ -16,6 +16,8 @@ import {
   Eye,
   Sparkles,
   Layers,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-vue-next'
 import {
   parseQueue as mockParseQueue,
@@ -73,7 +75,7 @@ const pageMessageType = ref<'success' | 'error' | 'info'>('info')
 const statusFilter = ref<string>('全部')
 const searchKeyword = ref('')
 const currentPage = ref(1)
-const pageSize = ref(10)
+const pageSize = 10
 const selectedQueueItems = ref<string[]>([])
 const showDuplicateModal = ref(false)
 const currentDuplicateFile = ref<DuplicateFileInfo | null>(null)
@@ -81,14 +83,6 @@ const editingField = ref<string | null>(null)
 const editFieldValue = ref('')
 
 const statusOptions = ['全部', '解析中', '待确认', '疑似重复', '解析失败', '已入库']
-
-const steps = [
-  { num: '1', label: '上传资料' },
-  { num: '2', label: 'AI解析' },
-  { num: '3', label: '人工确认' },
-  { num: '4', label: '入库并关联' },
-]
-const currentStep = ref(1)
 
 function showMessage(message: string, type: 'success' | 'error' | 'info' = 'info') {
   pageMessage.value = message
@@ -128,7 +122,6 @@ async function loadJobDetails(jobId: number) {
     extractedFields.value = fieldsRes.items
     updateAiResultFromFields(fieldsRes.items, jobRes)
     hasRealParse.value = true
-    currentStep.value = 3
   }
   if (candidatesRes && candidatesRes.items.length > 0) {
     updateCandidatesFromApi(candidatesRes.items, currentJob.value?.fileName || '')
@@ -223,7 +216,6 @@ async function handleFileChange(event: Event) {
     const parseRes = await startParseFile(uploadRes.fileId)
     if (parseRes) {
       currentJobId.value = parseRes.jobId
-      currentStep.value = 2
       await loadData()
       await loadJobDetails(parseRes.jobId)
       const sourceHint = currentJob.value?.parseSource === 'content'
@@ -296,7 +288,6 @@ async function handleConfirmAndLink() {
       }).join('；')
       : '未关联任务'
     showMessage(`资料已入库并关联 ${res.linkedTaskCount} 个任务。DocumentID：${res.documentId}。${linkedSummary}`, 'success')
-    currentStep.value = 4
     await loadData()
     emitWorkspaceRefresh({
       source: 'smart-upload',
@@ -361,7 +352,6 @@ async function handleViewResult(item: ParseQueueItem) {
   }
   if (item.jobId) {
     currentJobId.value = item.jobId
-    currentStep.value = 3
     await loadJobDetails(item.jobId)
   } else if (currentJobId.value) {
     await loadJobDetails(currentJobId.value)
@@ -424,20 +414,15 @@ const filteredQueue = computed(() => {
 })
 
 const paginatedQueue = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredQueue.value.slice(start, start + pageSize.value)
+  const start = (currentPage.value - 1) * pageSize
+  return filteredQueue.value.slice(start, start + pageSize)
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredQueue.value.length / pageSize.value)))
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredQueue.value.length / pageSize)))
 
 function goToPage(page: number) {
   if (page < 1 || page > totalPages.value) return
   currentPage.value = page
-}
-
-function changePageSize(size: number) {
-  pageSize.value = size
-  currentPage.value = 1
 }
 
 function getPageNumbers(): number[] {
@@ -545,7 +530,6 @@ function saveEditField(field: string) {
   if (field === 'suggestedTask') aiParseResult.value.suggestedTask = editFieldValue.value
   if (field === 'suggestedKpiName') aiParseResult.value.suggestedKpiName = editFieldValue.value
   editingField.value = null
-  currentStep.value = 3
   showMessage('已保存修改', 'success')
 }
 
@@ -561,13 +545,11 @@ function handleReuseExisting() {
 function handleUploadAsNewVersion() {
   showMessage('已作为新版本上传', 'success')
   showDuplicateModal.value = false
-  currentStep.value = 3
 }
 
 function handleConfirmDifferent() {
   showMessage('已确认为不同资料，继续处理', 'success')
   showDuplicateModal.value = false
-  currentStep.value = 3
   const idx = parseQueueList.value.findIndex(i => i.id === currentDuplicateFile.value?.id)
   if (idx > -1) {
     parseQueueList.value[idx].status = '待确认'
@@ -626,23 +608,7 @@ function goToRecPage(page: number) {
 </script>
 
 <template>
-  <div class="workspace-smart-upload">
-    <div class="ws-page-header">
-      <div class="ws-page-title-group">
-        <div class="ws-page-title">ESG智能入库</div>
-        <div class="ws-page-subtitle">智能解析资料并关联指标、事项和任务</div>
-      </div>
-      <div class="ws-page-header-extra">
-        <div class="step-indicator">
-          <div v-for="(step, idx) in steps" :key="step.num" class="step-item" :class="{ active: currentStep >= Number(step.num), done: currentStep > Number(step.num) }">
-            <span class="step-num">{{ step.num }}</span>
-            <span class="step-label">{{ step.label }}</span>
-            <span v-if="idx < steps.length - 1" class="step-arrow">→</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
+  <div class="workspace-smart-upload ws-page">
     <div v-if="pageMessage" class="ws-page-message" :class="pageMessageType">{{ pageMessage }}</div>
 
     <div class="main-content">
@@ -661,30 +627,29 @@ function goToRecPage(page: number) {
 
           <div class="upload-area" @click="handleSelectFile">
             <div class="upload-icon">
-              <Upload :size="28" />
+              <Upload :size="20" />
             </div>
             <div class="upload-text">将文件拖拽到此处，或选择文件上传</div>
           </div>
 
           <div class="upload-desc">
-            支持 PDF、Word、Excel、CSV、TXT、图片及压缩包。上传后读取文件内容识别资料类型、周期、业务字段并关联任务。
-            演示建议使用样例：{{ SAMPLE_FILE_NAME }}
+            支持 PDF、Word、Excel、CSV、TXT、图片及压缩包。演示建议：{{ SAMPLE_FILE_NAME }}
           </div>
 
           <div class="upload-buttons">
-            <button class="upload-btn primary" @click="handleSelectFile">
+            <button class="ws-btn ws-btn-primary" @click="handleSelectFile">
               <Upload :size="14" />
               <span>选择本地文件</span>
             </button>
-            <button class="upload-btn" @click="handleDownloadSample">
+            <button class="ws-btn ws-btn-secondary" @click="handleDownloadSample">
               <FileSpreadsheet :size="14" />
               <span>下载样例文件</span>
             </button>
-            <button class="upload-btn" @click="handleBatchImport">
+            <button class="ws-btn ws-btn-secondary" @click="handleBatchImport">
               <FolderOpen :size="14" />
               <span>批量导入</span>
             </button>
-            <button class="upload-btn" @click="handleSelectFromCenter">
+            <button class="ws-btn ws-btn-secondary" @click="handleSelectFromCenter">
               <Link2 :size="14" />
               <span>从资料中心选择</span>
             </button>
@@ -692,39 +657,38 @@ function goToRecPage(page: number) {
         </div>
 
         <div class="parse-queue-section ws-panel">
-          <div class="queue-toolbar">
-            <div class="queue-title-row">
-              <span class="queue-title">解析队列（{{ filteredQueue.length }}）</span>
-            </div>
-            <div class="queue-filters">
-              <div class="status-tabs">
-                <span
-                  v-for="status in statusOptions"
-                  :key="status"
-                  class="status-tab"
-                  :class="{ active: statusFilter === status }"
-                  @click="statusFilter = status; currentPage = 1"
-                >{{ status }}</span>
-              </div>
-              <div class="search-box">
-                <Search :size="14" class="search-icon" />
-                <input v-model="searchKeyword" type="text" placeholder="搜索文件名..." class="search-input" @input="currentPage = 1" />
-              </div>
-            </div>
+          <div class="ws-panel-header">
+            <div class="ws-panel-title">解析队列</div>
             <div class="queue-actions">
-              <button class="toolbar-btn" @click="handleBatchRetry" :disabled="selectedQueueItems.length === 0">
+              <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleBatchRetry" :disabled="selectedQueueItems.length === 0">
                 <RefreshCw :size="14" />
                 <span>批量重解析</span>
               </button>
-              <button class="toolbar-btn danger" @click="handleBatchClearFailed" :disabled="selectedQueueItems.length === 0">
+              <button class="ws-btn ws-btn-danger ws-btn-sm" @click="handleBatchClearFailed" :disabled="selectedQueueItems.length === 0">
                 <Trash2 :size="14" />
                 <span>清除失败</span>
               </button>
             </div>
           </div>
 
-          <div class="ws-table-container">
-            <div class="ws-table-header-wrapper">
+          <div class="queue-filters">
+            <div class="status-tabs">
+              <span
+                v-for="status in statusOptions"
+                :key="status"
+                class="status-tab"
+                :class="{ active: statusFilter === status }"
+                @click="statusFilter = status; currentPage = 1"
+              >{{ status }}</span>
+            </div>
+            <div class="ws-search-box queue-search">
+              <Search :size="14" />
+              <input v-model="searchKeyword" type="text" placeholder="搜索文件名..." @input="currentPage = 1" />
+            </div>
+          </div>
+
+          <div class="ws-table-container queue-table">
+            <div class="ws-table-scroll no-scroll">
               <table class="ws-table">
                 <colgroup>
                   <col class="col-checkbox" />
@@ -740,27 +704,14 @@ function goToRecPage(page: number) {
                     <th class="col-checkbox">
                       <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
                     </th>
-                    <th>文件名</th>
-                    <th>大小</th>
-                    <th>进度</th>
-                    <th>状态</th>
-                    <th>上传时间</th>
-                    <th>操作</th>
+                    <th class="col-file">文件名</th>
+                    <th class="col-size">大小</th>
+                    <th class="col-progress">进度</th>
+                    <th class="col-status">状态</th>
+                    <th class="col-time">上传时间</th>
+                    <th class="col-action">下一步</th>
                   </tr>
                 </thead>
-              </table>
-            </div>
-            <div class="ws-table-body-wrapper no-scroll">
-              <table class="ws-table">
-                <colgroup>
-                  <col class="col-checkbox" />
-                  <col class="col-file" />
-                  <col class="col-size" />
-                  <col class="col-progress" />
-                  <col class="col-status" />
-                  <col class="col-time" />
-                  <col class="col-action" />
-                </colgroup>
                 <tbody>
                   <tr v-for="item in paginatedQueue" :key="item.id" :class="{ selected: selectedQueueItems.includes(item.id) }">
                     <td class="col-checkbox">
@@ -772,25 +723,27 @@ function goToRecPage(page: number) {
                     </td>
                     <td class="col-size">{{ item.size }}</td>
                     <td class="col-progress">
-                      <div class="progress-bar">
-                        <div class="progress-fill" :style="{ width: `${item.progress}%` }"></div>
+                      <div class="ws-progress">
+                        <div class="ws-progress-bar">
+                          <div class="ws-progress-fill" :style="{ width: `${item.progress}%` }"></div>
+                        </div>
+                        <span class="ws-progress-text">{{ item.progress }}%</span>
                       </div>
-                      <span class="progress-text">{{ item.progress }}%</span>
                     </td>
                     <td class="col-status">
-                      <span class="status-badge" :style="{ color: getStatusColor(item.status), borderColor: getStatusColor(item.status) + '50', background: getStatusColor(item.status) + '10' }">
+                      <span class="status-tag" :style="{ background: `${getStatusColor(item.status)}20`, color: getStatusColor(item.status) }">
                         {{ item.status }}
                       </span>
                     </td>
                     <td class="col-time">{{ item.uploadTime || '-' }}</td>
                     <td class="col-action">
-                      <button class="row-action-btn primary" @click.stop="handleViewResult(item)">
+                      <button class="ws-btn ws-btn-action ws-btn-sm" @click.stop="handleViewResult(item)">
                         {{ getQueueButtonAction(item.status) }}
                       </button>
-                      <button v-if="item.status === '解析失败'" class="row-action-btn" @click.stop="handleRetryParse(item)">
+                      <button v-if="item.status === '解析失败'" class="ws-btn ws-btn-secondary ws-btn-sm" @click.stop="handleRetryParse(item)">
                         <RefreshCw :size="12" />
                       </button>
-                      <button v-if="item.status === '解析失败'" class="row-action-btn danger" @click.stop="handleClearFailed(item)">
+                      <button v-if="item.status === '解析失败'" class="ws-btn ws-btn-danger ws-btn-sm" @click.stop="handleClearFailed(item)">
                         <Trash2 :size="12" />
                       </button>
                     </td>
@@ -801,29 +754,26 @@ function goToRecPage(page: number) {
                 </tbody>
               </table>
             </div>
+          </div>
 
-            <div class="ws-pagination-bar">
-              <div class="ws-pagination-info">
-                共 <span class="highlight">{{ filteredQueue.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
-              </div>
-              <div class="ws-pagination-controls">
-                <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
-                <button
-                  v-for="p in getPageNumbers()"
-                  :key="p"
-                  class="ws-page-btn"
-                  :class="{ active: currentPage === p }"
-                  @click="goToPage(p)"
-                >
-                  {{ p }}
-                </button>
-                <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
-                <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
-                  <option :value="10">10条/页</option>
-                  <option :value="20">20条/页</option>
-                  <option :value="30">30条/页</option>
-                </select>
-              </div>
+          <div class="ws-pagination-bar">
+            <div class="ws-pagination-info">共 <span class="highlight">{{ filteredQueue.length }}</span> 项，每页 {{ pageSize }} 项</div>
+            <div class="ws-pagination-controls">
+              <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
+                <ChevronLeft :size="14" />
+              </button>
+              <button
+                v-for="p in getPageNumbers()"
+                :key="p"
+                class="ws-page-btn"
+                :class="{ active: currentPage === p }"
+                @click="goToPage(p)"
+              >
+                {{ p }}
+              </button>
+              <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
+                <ChevronRight :size="14" />
+              </button>
             </div>
           </div>
         </div>
@@ -1002,12 +952,12 @@ function goToRecPage(page: number) {
                 </div>
               </div>
               <div class="recommend-actions">
-                <button class="rec-btn primary" @click="handleReuseAndRecommend(task)">复用并关联</button>
-                <button class="rec-btn" @click="handleViewFile(task.documentName)">
+                <button class="ws-btn ws-btn-primary ws-btn-sm" @click="handleReuseAndRecommend(task)">复用并关联</button>
+                <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleViewFile(task.documentName)">
                   <Eye :size="12" />
                   <span>查看</span>
                 </button>
-                <button class="rec-btn ghost" @click="handleIgnoreRecommend(task)">
+                <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleIgnoreRecommend(task)">
                   <XCircle :size="12" />
                   <span>忽略</span>
                 </button>
@@ -1134,75 +1084,17 @@ function goToRecPage(page: number) {
 
 <style scoped>
 .workspace-smart-upload {
-  padding: 14px 16px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  gap: 12px;
+  min-height: 0;
 }
 
-.step-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.step-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #5a7a9a;
-}
-
-.step-item.active {
-  color: #69e36f;
-}
-
-.step-item.done {
-  color: #8fa9c8;
-}
-
-.step-num {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-  color: #5a7a9a;
-}
-
-.step-item.active .step-num {
-  background: linear-gradient(135deg, #69e36f, #2f9cff);
-  border-color: transparent;
-  color: #031020;
-}
-
-.step-item.done .step-num {
-  background: rgba(105, 227, 111, 0.15);
-  border-color: rgba(105, 227, 111, 0.4);
-  color: #69e36f;
-}
-
-.step-label {
-  font-size: 12px;
-}
-
-.step-arrow {
-  color: #3a5a7a;
-  margin-left: 4px;
+.upload-buttons .ws-btn,
+.recommend-actions .ws-btn {
+  flex: 1;
 }
 
 .main-content {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex: 1;
   overflow: hidden;
 }
@@ -1211,15 +1103,17 @@ function goToRecPage(page: number) {
   width: 60%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow: hidden;
+  gap: 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .right-section {
   width: 40%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
 }
 
@@ -1227,10 +1121,14 @@ function goToRecPage(page: number) {
   display: none;
 }
 
+.upload-section {
+  flex-shrink: 0;
+}
+
 .upload-area {
   border: 2px dashed rgba(105, 227, 111, 0.3);
   border-radius: 8px;
-  padding: 24px;
+  padding: 10px 12px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
@@ -1243,7 +1141,7 @@ function goToRecPage(page: number) {
 
 .upload-icon {
   color: #69e36f;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   display: flex;
   justify-content: center;
 }
@@ -1255,17 +1153,17 @@ function goToRecPage(page: number) {
 }
 
 .upload-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: #8fa9c8;
-  margin-top: 10px;
-  line-height: 1.6;
+  margin-top: 6px;
+  line-height: 1.4;
   text-align: center;
 }
 
 .upload-buttons {
   display: flex;
-  gap: 10px;
-  margin-top: 12px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .upload-btn {
@@ -1297,41 +1195,34 @@ function goToRecPage(page: number) {
 }
 
 .parse-queue-section {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
-.queue-toolbar {
-  margin-bottom: 12px;
-}
-
-.queue-title-row {
-  margin-bottom: 10px;
-}
-
-.queue-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #e8f3ff;
+.parse-queue-section > .ws-pagination-bar {
+  border: 1px solid rgba(47, 156, 255, 0.14);
+  border-radius: 0 0 8px 8px;
 }
 
 .queue-filters {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .status-tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   flex-wrap: wrap;
 }
 
 .status-tab {
-  padding: 4px 10px;
+  padding: 2px 8px;
   font-size: 12px;
   color: #8fa9c8;
   border-radius: 4px;
@@ -1342,42 +1233,19 @@ function goToRecPage(page: number) {
 }
 
 .status-tab:hover {
-  color: #69e36f;
+  color: #2f9cff;
 }
 
 .status-tab.active {
-  color: #69e36f;
-  background: rgba(105, 227, 111, 0.1);
-  border-color: rgba(105, 227, 111, 0.3);
+  color: #2f9cff;
+  background: rgba(47, 156, 255, 0.1);
+  border-color: rgba(47, 156, 255, 0.3);
 }
 
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.15);
-  border-radius: 6px;
+.queue-search {
   margin-left: auto;
-}
-
-.search-icon {
-  color: #5a7a9a;
+  width: 180px;
   flex-shrink: 0;
-}
-
-.search-input {
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #e8f3ff;
-  font-size: 12px;
-  width: 140px;
-}
-
-.search-input::placeholder {
-  color: #5a7a9a;
 }
 
 .queue-actions {
@@ -1385,76 +1253,35 @@ function goToRecPage(page: number) {
   gap: 8px;
 }
 
-.toolbar-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.toolbar-btn:hover:not(:disabled) {
-  background: rgba(105, 227, 111, 0.15);
-  color: #69e36f;
-}
-
-.toolbar-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.toolbar-btn.danger {
-  background: rgba(255, 79, 94, 0.08);
-  border-color: rgba(255, 79, 94, 0.2);
-  color: #ff8a96;
-}
-
-.toolbar-btn.danger:hover:not(:disabled) {
-  background: rgba(255, 79, 94, 0.15);
-}
-
-.ws-table {
-  table-layout: fixed;
+.queue-table {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  flex: 1;
+  min-height: 0;
 }
 
 .col-checkbox {
   width: 40px;
 }
 
-col.col-file {
+.col-file {
   width: auto;
 }
 
-.ws-table td.col-file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.file-icon {
+.col-file .file-icon {
   color: #8fa9c8;
   flex-shrink: 0;
+  vertical-align: middle;
+  margin-right: 8px;
 }
 
 .file-name-text {
-  font-size: 13px;
-  color: #e8f3ff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .col-size {
-  width: 90px;
-}
-
-.ws-table td.col-size {
+  width: 80px;
   color: #8fa9c8;
   font-size: 12px;
 }
@@ -1463,99 +1290,22 @@ col.col-file {
   width: 140px;
 }
 
-.ws-table td.col-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.progress-bar {
-  flex: 1;
-  height: 6px;
-  background: rgba(105, 227, 111, 0.1);
-  border-radius: 3px;
-  overflow: hidden;
-  min-width: 40px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #69e36f, #2f9cff);
-  border-radius: 3px;
-}
-
-.progress-text {
-  font-size: 11px;
-  color: #8fa9c8;
-  width: 38px;
-  flex-shrink: 0;
-}
-
 .col-status {
-  width: 90px;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid;
-  white-space: nowrap;
+  width: 100px;
 }
 
 .col-time {
-  width: 130px;
-}
-
-.ws-table td.col-time {
-  font-size: 12px;
+  width: 176px;
   color: #8fa9c8;
+  font-size: 12px;
 }
 
 .col-action {
-  width: 180px;
+  width: 168px;
 }
 
-.ws-table td.col-action {
-  text-align: center;
-}
-
-.row-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 12px;
-  cursor: pointer;
-  margin-right: 4px;
-  transition: all 0.2s;
-}
-
-.row-action-btn:hover {
-  background: rgba(105, 227, 111, 0.15);
-  color: #69e36f;
-}
-
-.row-action-btn.primary {
-  background: rgba(105, 227, 111, 0.12);
-  color: #69e36f;
-  border-color: rgba(105, 227, 111, 0.3);
-}
-
-.row-action-btn.danger {
-  background: rgba(255, 79, 94, 0.08);
-  border-color: rgba(255, 79, 94, 0.2);
-  color: #ff8a96;
-}
-
-.row-action-btn.danger:hover {
-  background: rgba(255, 79, 94, 0.15);
+.col-action .ws-btn + .ws-btn {
+  margin-left: 4px;
 }
 
 .empty-row {

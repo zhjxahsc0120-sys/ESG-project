@@ -1,52 +1,37 @@
-﻿# NEXT FOR TRAE — read before Dashboard/GIS work
+# NEXT_FOR_TRAE
 
-## Protected baseline (do not overwrite casually)
+**状态：** READY_for_trae  
+**更新日期：** 2026-07-26  
+**当前唯一任务单：** `_handoff/Trae实施任务单_Workspace右侧碳与月报_V1.0_20260726.md`  
+**设计依据：** `_handoff/Workspace右侧_碳与月报模块设计_V0.1_20260726.md`  
+**开工基线：** `baseline/workspace-ui-20260726`（说明：`_handoff/BASELINE_Workspace_UI_20260726.md`）  
+**首页保护基线（勿删）：** `baseline/l1-l2-gis-20260726`
 
-As of **2026-07-26**, the product-complete Dashboard L1/L2 + GIS state is pinned:
+## 本 sprint 指令
 
-| Item | Value |
-|------|--------|
-| Annotated tag | `baseline/l1-l2-gis-20260726` |
-| Note | `_handoff/BASELINE_L1L2_GIS_20260726.md` |
-| Branch when pinned | `trae/workspace-nav-s02s03` |
+在 **数据填报（Workspace）→ 填报概览** 右侧栏增加与首页同源的 **碳摘要** + **月报摘要**（两张 `.ws-panel`）。保留紧凑 ESG 助手入口；今日重点降级 ≤2 条；下钻由 `WorkspacePage` 宿主挂载既有 E04 / 月报模态。
 
-**Trae must not** change Dashboard GIS L1/L2, home master layout, Cesium GIS overview module, or related L1/L2 panels **without an Issue that explicitly authorizes that scope**.
+**红线：** 禁止碰 Dashboard / GIS / e01–e03/s02 / HeaderNav / Assistant / `layout.scss`·全局 tokens / 首页 `CarbonBenefitPanel` 源码重写（可只读 API）/ S01–G04 模态内部。**仅允许** `WorkspacePage`、`components/workspace/**`、`workspace.scss`，及 `api.ts` 薄读调用（无新 schema）。版式必须统一现有 Workspace UI，禁止新视觉语言。
 
-If a task only covers Workspace / Assistant / a single modal polish, keep diffs off:
+**数据：** `GET /api/dashboard/panels`（碳）+ `GET /api/monthly-report/readiness`（月报）；禁止硬编码 6175；UI 禁止演示/测试 chrome。
 
-- `src/views/DashboardPage.vue` (except trivial wiring already required by scoped Issue)
-- `src/components/master/*`
-- `src/modules/traffic-gis-overview/**`
-- `src/components/gis/*` home embedding paths
-- Core L1/L2 KPI/panel composition unless the Issue says otherwise
+**回退：** `git switch --detach baseline/workspace-ui-20260726`
 
-Prefer restoring from the tag if accidental overwrites happen.
+## 旧 sprint 已取消 / 已取代 / 并行
 
-## Prior task context (GIS lazy-load — historical)
+| 文档 | 处置 |
+|------|------|
+| `_handoff/Trae实施任务单_数据填报页续作_仅Workspace_V1.0_20260726.md` | **并行收尾可继续**；NEXT 主指针为本碳/月报单；冲突以本单红线为准 |
+| `_handoff/Trae实施任务单_Workspace入口与S02S03小改_V1.0_20260726.md` | **SUPERSEDED** |
+| `_handoff/Trae实施任务单_Workspace智能入库真解析演示_V1.0_20260726.md` | 旁路能力相关；非主指针 |
+| Header 大屏视觉统一 | **HOLD** |
+| 助手 DB 驱动问答 | **OUT** |
 
-Earlier handoff below described Cesium chunk lazy-load for `/gis-preview`. That work is **out of band** relative to the protected baseline unless re-scoped in a new Issue. Do not treat the old “允许修改 GisPreviewPage / GisOverviewCesiumPanel” note as permission to rewrite L1/L2 home.
+## 基线
 
----
+- Workspace 开工/回退：`baseline/workspace-ui-20260726` → `_handoff/BASELINE_Workspace_UI_20260726.md`
+- 首页 L1/L2 GIS：`baseline/l1-l2-gis-20260726` → 仍有效，**两 tag 共存**
 
-## Legacy brief (reference only): Cesium lazy-load chunking
+## 完成后
 
-第二阶段已完成首页 `useRealGisOnDashboard` 开关与 `GisOverviewCesiumPanel` 异步组件。若再做彻底懒加载分包，须单独 Issue，且验收后不得破坏 `baseline/l1-l2-gis-20260726` 的视觉与交互完整态。
-
-允许修改（仅当 Issue 明确要求）：
-
-- `src/views/GisPreviewPage.vue`
-- `src/components/gis/GisOverviewCesiumPanel.vue`
-- 必要时轻微调整 `vite.config.ts`
-
-默认禁止修改（受 baseline 保护）：
-
-- `src/views/DashboardPage.vue`
-- `src/components/panels/GisOverviewPanel.vue` / master GIS section
-- `src/modules/traffic-gis-overview/`（除非 Issue 点名且含回归清单）
-
-## Related recovery docs
-
-- `_handoff/BASELINE_L1L2_GIS_20260726.md`
-- `_handoff/Cursor_L1L2_GIS完整态恢复说明_20260726.md`
-- `_handoff/Cursor_完整态校核_20260726.md`
-- `_handoff/Cursor_首页回归回退说明_20260726.md`
+按任务单 §验收与交付包约定收口；等待 Codex 验收。勿默认写满 `_handoff/TRAE_DONE_REPORT.md` 除非本单约定要求。

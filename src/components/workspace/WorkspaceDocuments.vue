@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import {
   Search,
   FileText,
-  Download,
-  Eye,
   Link2,
   Tag,
   Clock,
   User,
   Folder,
-  ChevronDown,
-  MoreHorizontal,
   History,
   RefreshCw,
   Shield,
@@ -23,7 +19,6 @@ import {
   FileType,
   RotateCcw,
   Filter,
-  Upload,
 } from 'lucide-vue-next'
 import {
   documents as mockDocuments,
@@ -44,7 +39,6 @@ const documentList = ref<DocumentType[]>([...mockDocuments])
 const selectedDoc = ref<DocumentType>({ ...mockDocuments[0] })
 const pageMessage = ref('')
 const pageMessageType = ref<'info' | 'success' | 'error'>('info')
-const activeMoreMenu = ref<string | null>(null)
 const activeDetailTab = ref<'detail' | 'version' | 'relation'>('detail')
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -263,46 +257,10 @@ function handleReset() {
 function handleSelectDocument(doc: DocumentType) {
   selectedDoc.value = { ...doc }
   activeDetailTab.value = 'detail'
-  activeMoreMenu.value = null
-}
-
-function toggleMoreMenu(docId: string, event: Event) {
-  event.stopPropagation()
-  activeMoreMenu.value = activeMoreMenu.value === docId ? null : docId
-}
-
-function closeMoreMenu() {
-  activeMoreMenu.value = null
 }
 
 function handlePreview() {
   showMessage('文件预览功能为原型预留，暂未接入真实文件预览服务。', 'info')
-  closeMoreMenu()
-}
-
-function handleViewVersion() {
-  activeDetailTab.value = 'version'
-  closeMoreMenu()
-}
-
-function handleViewRelation() {
-  activeDetailTab.value = 'relation'
-  closeMoreMenu()
-}
-
-function handleReuse() {
-  showMessage('复用到其他任务功能为原型预留，后续接入跨任务资料复用流程。', 'info')
-  closeMoreMenu()
-}
-
-function handleDownload() {
-  showMessage('文件下载功能为原型预留，暂未接入真实下载服务。', 'info')
-  closeMoreMenu()
-}
-
-function handleUpdateVersion() {
-  showMessage('更新版本功能为原型预留，后续接入版本上传流程。', 'info')
-  closeMoreMenu()
 }
 
 function showMessage(message: string, type: 'info' | 'success' | 'error' = 'info') {
@@ -337,25 +295,10 @@ const currentVersion = computed(() => {
 const historyVersions = computed(() => {
   return selectedDoc.value?.versions?.filter(v => !v.isCurrent) || []
 })
-
-onMounted(() => {
-  document.addEventListener('click', closeMoreMenu)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', closeMoreMenu)
-})
 </script>
 
 <template>
-  <div class="workspace-documents">
-    <div class="ws-page-header">
-      <div class="ws-page-title-group">
-        <div class="ws-page-title">资料中心与档案</div>
-        <div class="ws-page-subtitle">统一入库、版本管理与跨流程复用</div>
-      </div>
-    </div>
-
+  <div class="workspace-documents ws-page">
     <div v-if="pageMessage" :class="['ws-page-message', pageMessageType]">
       {{ pageMessage }}
     </div>
@@ -442,9 +385,9 @@ onUnmounted(() => {
       </div>
 
       <div class="middle-section">
-        <div class="filter-bar">
-          <div class="filter-row">
-            <div class="search-box">
+        <div class="ws-filter-bar filter-bar">
+          <div class="ws-filter-row filter-row">
+            <div class="ws-search-box search-box">
               <Search :size="16" />
               <input v-model="searchKeyword" type="text" placeholder="请输入资料名称" />
             </div>
@@ -462,7 +405,7 @@ onUnmounted(() => {
               </select>
             </div>
           </div>
-          <div class="filter-row">
+          <div class="ws-filter-row filter-row">
             <div class="filter-group">
               <span class="filter-label">来源</span>
               <select v-model="selectedSource">
@@ -485,11 +428,11 @@ onUnmounted(() => {
               </select>
             </div>
             <div class="filter-actions">
-              <button class="reset-btn" @click="handleReset">
+              <button class="ws-btn ws-btn-secondary" @click="handleReset">
                 <RotateCcw :size="14" />
                 重置
               </button>
-              <button class="filter-btn">
+              <button class="ws-btn ws-btn-primary">
                 <Filter :size="14" />
                 筛选
               </button>
@@ -498,8 +441,19 @@ onUnmounted(() => {
         </div>
 
         <div class="ws-table-container">
-          <div class="ws-table-header-wrapper">
+          <div class="ws-table-scroll" :class="{ 'no-scroll': pageSize <= 10 }">
             <table class="ws-table">
+              <colgroup>
+                <col class="col-name" />
+                <col class="col-type" />
+                <col class="col-module" />
+                <col class="col-cycle" />
+                <col class="col-version" />
+                <col class="col-source" />
+                <col class="col-related" />
+                <col class="col-status" />
+                <col class="col-action" />
+              </colgroup>
               <thead>
                 <tr>
                   <th class="col-name">资料名称</th>
@@ -513,10 +467,6 @@ onUnmounted(() => {
                   <th class="col-action">操作</th>
                 </tr>
               </thead>
-            </table>
-          </div>
-          <div class="ws-table-body-wrapper">
-            <table class="ws-table">
               <tbody>
                 <tr
                   v-for="doc in paginatedDocuments"
@@ -562,38 +512,10 @@ onUnmounted(() => {
                     </span>
                   </td>
                   <td class="col-action">
-                    <button class="action-btn preview-btn" @click.stop="handlePreview">
-                      <Eye :size="14" />
-                      预览
-                    </button>
-                    <div class="more-menu-wrapper" @click.stop>
-                      <button class="action-btn more-btn" @click="toggleMoreMenu(doc.id, $event)">
-                        <MoreHorizontal :size="14" />
-                        更多
-                        <ChevronDown :size="12" />
+                    <div class="action-cell">
+                      <button class="action-btn preview-btn" @click.stop="handlePreview">
+                        预览
                       </button>
-                      <div v-if="activeMoreMenu === doc.id" class="more-menu">
-                        <button class="menu-item" @click="handleViewVersion">
-                          <History :size="14" />
-                          查看版本
-                        </button>
-                        <button class="menu-item" @click="handleViewRelation">
-                          <Link2 :size="14" />
-                          查看关联
-                        </button>
-                        <button class="menu-item" @click="handleReuse">
-                          <RefreshCw :size="14" />
-                          复用
-                        </button>
-                        <button class="menu-item" @click="handleDownload">
-                          <Download :size="14" />
-                          下载
-                        </button>
-                        <button class="menu-item" @click="handleUpdateVersion">
-                          <Upload :size="14" />
-                          更新版本
-                        </button>
-                      </div>
                     </div>
                   </td>
                 </tr>
@@ -670,11 +592,6 @@ onUnmounted(() => {
                   </span>
                 </div>
               </div>
-            </div>
-
-            <div class="green-banner">
-              <Shield :size="16" />
-              <span>一个文件实体，多流程引用</span>
             </div>
 
             <div class="ws-detail-section">
@@ -965,18 +882,12 @@ onUnmounted(() => {
 
 <style scoped>
 .workspace-documents {
-  padding: 14px 16px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  gap: 12px;
+  min-height: 0;
 }
 
 .main-content {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
 }
@@ -1162,47 +1073,44 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.middle-section > .ws-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.middle-section > .ws-table-container + .ws-pagination-bar {
+  flex: 0 0 auto;
+  margin-top: 0;
 }
 
 .filter-bar {
-  background: rgba(5, 26, 50, 0.6);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 12px 14px;
+  /* chrome from .ws-filter-bar */
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
 .filter-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 .search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 6px;
-  padding: 6px 10px;
-  color: #8fa9c8;
+  /* size only; chrome from .ws-search-box */
   min-width: 220px;
-}
-
-.search-box input {
-  background: transparent;
-  border: none;
-  color: #e8f3ff;
-  font-size: 12px;
-  flex: 1;
-  outline: none;
 }
 
 .filter-group {
@@ -1270,39 +1178,41 @@ onUnmounted(() => {
 }
 
 .col-name {
-  min-width: 200px;
+  width: auto;
 }
 
 .col-type {
-  min-width: 90px;
+  width: 100px;
 }
 
 .col-module {
-  min-width: 100px;
+  width: 120px;
 }
 
 .col-cycle {
-  min-width: 90px;
+  width: 110px;
 }
 
 .col-version {
-  min-width: 70px;
+  width: 88px;
 }
 
 .col-source {
-  min-width: 90px;
+  width: 90px;
 }
 
 .col-related {
-  min-width: 80px;
+  width: 88px;
 }
 
 .col-status {
-  min-width: 90px;
+  width: 96px;
 }
 
 .col-action {
-  min-width: 130px;
+  width: 88px;
+  min-width: 88px;
+  position: relative;
 }
 
 .doc-name {
@@ -1363,23 +1273,29 @@ onUnmounted(() => {
   border-radius: 50%;
 }
 
-.col-action {
-  position: relative;
+.action-cell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px;
+  white-space: nowrap;
 }
 
 .action-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: 2px;
+  padding: 4px 6px;
   background: transparent;
   border: none;
   color: #8fa9c8;
   font-size: 12px;
+  line-height: 1.2;
   cursor: pointer;
   border-radius: 4px;
   transition: all 0.2s;
-  margin-right: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .action-btn:hover {
@@ -1387,52 +1303,13 @@ onUnmounted(() => {
   background: rgba(105, 227, 111, 0.1);
 }
 
-.preview-btn:hover {
+.preview-btn {
   color: #2f9cff;
+}
+
+.preview-btn:hover {
+  color: #5fb4ff;
   background: rgba(47, 156, 255, 0.1);
-}
-
-.more-btn {
-  position: relative;
-}
-
-.more-menu-wrapper {
-  display: inline-block;
-  position: relative;
-}
-
-.more-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  background: rgba(10, 35, 65, 0.98);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 6px;
-  padding: 4px 0;
-  min-width: 120px;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  background: transparent;
-  border: none;
-  color: #e8f3ff;
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.2s;
-}
-
-.menu-item:hover {
-  background: rgba(105, 227, 111, 0.1);
-  color: #69e36f;
 }
 
 .right-sidebar {
@@ -1520,21 +1397,6 @@ onUnmounted(() => {
   gap: 4px;
   font-size: 11px;
   color: #8fa9c8;
-}
-
-.green-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  background: linear-gradient(135deg, rgba(105, 227, 111, 0.15) 0%, rgba(47, 156, 255, 0.15) 100%);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 6px;
-  color: #69e36f;
-  font-size: 12px;
-  font-weight: 500;
-  margin-bottom: 14px;
 }
 
 .detail-grid {

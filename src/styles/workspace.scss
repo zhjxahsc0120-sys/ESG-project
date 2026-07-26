@@ -1,64 +1,67 @@
 // ─────────────────────────────────────────────
-// 数据填报与上传工作台公共样式
-// 5个页面统一视觉规范：标题槽位、统计卡、表格、分页、面板、按钮
-// 画布基准：1920 × 1080，flex 自适应高度
+// 数据填报 Workspace 局部样式（仅由 WorkspacePage 引入）
+// 不改 layout.scss / tokens.scss 全局 token
 // ─────────────────────────────────────────────
 
-// ── 公共变量 ──
-$ws-page-pad: 16px;              // 页面左右内边距
-$ws-page-pad-y: 14px;            // 页面上下内边距
-$ws-section-gap: 12px;           // 同级模块间距
-$ws-panel-pad: 12px;             // 面板内边距
-$ws-panel-radius: 8px;           // 面板圆角
-$ws-card-gap: 10px;              // 卡片间距
-$ws-title-size: 18px;            // 页面标题字号
-$ws-subtitle-size: 12px;         // 辅助说明字号
-$ws-stat-height: 74px;           // 统计卡高度
-$ws-stat-number-size: 24px;      // 统计卡数字字号
-$ws-stat-label-size: 12px;       // 统计卡名称字号
-$ws-stat-unit-size: 11px;        // 统计卡单位字号
-$ws-table-header-h: 36px;        // 表头高度
-$ws-table-row-h: 40px;           // 数据行高度
-$ws-pagination-h: 40px;          // 分页栏高度
-$ws-control-h: 30px;             // 控件高度
+.workspace-page {
+  --ws-page-pad: 12px;
+  --ws-page-pad-y: 10px;
+  --ws-section-gap: 8px;
+  --ws-panel-pad: 10px 12px;
+  --ws-panel-radius: 8px;
+  --ws-card-gap: 8px;
+  --ws-control-h: 30px;
+  --ws-filter-gap: 6px;
+  --ws-table-header-h: 36px;
+  --ws-table-row-h: 44px;
+  --ws-pagination-h: 40px;
 
-// ── 颜色语义（工作台专用）──
-$ws-bg-panel: rgba(5, 26, 50, 0.8);
-$ws-bg-card: rgba(5, 26, 50, 0.8);
-$ws-border-base: rgba(105, 227, 111, 0.1);
-$ws-border-soft: rgba(105, 227, 111, 0.08);
-$ws-border-hover: rgba(105, 227, 111, 0.3);
-$ws-text-primary: #e8f3ff;
-$ws-text-secondary: #8fa9c8;
-$ws-text-muted: #5a7a9a;
-$ws-green: #69e36f;
-$ws-blue: #2f9cff;
-$ws-purple: #a66cff;
-$ws-yellow: #ffb347;
-$ws-red: #ff4f5e;
+  --ws-bg-panel: rgba(5, 26, 50, 0.8);
+  --ws-bg-input: rgba(0, 0, 0, 0.3);
+  --ws-border: rgba(47, 156, 255, 0.14);
+  --ws-border-soft: rgba(47, 156, 255, 0.08);
+  --ws-border-strong: rgba(47, 156, 255, 0.35);
+
+  --ws-text-primary: #e8f3ff;
+  --ws-text-secondary: #8fa9c8;
+  --ws-text-muted: #5a7a9a;
+
+  --ws-cyan: #2f9cff;
+  --ws-cyan-soft: #7fb6ef;
+  --ws-green: #69e36f;
+  --ws-purple: #a66cff;
+  --ws-yellow: #ffb347;
+  --ws-red: #ff4f5e;
+
+  --ws-primary-grad: linear-gradient(135deg, #1a8cff 0%, #2f9cff 55%, #4db3ff 100%);
+}
 
 // ─────────────────────────────────────────────
 // 页面容器
 // ─────────────────────────────────────────────
 .ws-page {
-  padding: $ws-page-pad-y $ws-page-pad;
+  padding: var(--ws-page-pad-y) var(--ws-page-pad);
   height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   overflow: hidden;
-  gap: $ws-section-gap;
+  gap: var(--ws-section-gap);
+}
+
+.ws-page-scroll {
+  overflow-y: auto;
 }
 
 // ─────────────────────────────────────────────
-// 标题槽位（统一高度，防止页面切换跳动）
+// 标题槽位
 // ─────────────────────────────────────────────
 .ws-page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
-  min-height: 40px;
+  min-height: 0;
 }
 
 .ws-page-title-group {
@@ -68,15 +71,15 @@ $ws-red: #ff4f5e;
 }
 
 .ws-page-title {
-  font-size: $ws-title-size;
+  font-size: 18px;
   font-weight: 600;
-  color: $ws-text-primary;
+  color: var(--ws-text-primary);
   line-height: 22px;
 }
 
 .ws-page-subtitle {
-  font-size: $ws-subtitle-size;
-  color: $ws-text-secondary;
+  font-size: 12px;
+  color: var(--ws-text-secondary);
   line-height: 16px;
 }
 
@@ -87,13 +90,13 @@ $ws-red: #ff4f5e;
 }
 
 // ─────────────────────────────────────────────
-// 页面消息提示
+// 页面消息
 // ─────────────────────────────────────────────
 .ws-page-message {
-  padding: 10px 14px;
-  border-radius: $ws-panel-radius;
+  padding: 8px 12px;
+  border-radius: var(--ws-panel-radius);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.4;
   flex-shrink: 0;
 
   &.info {
@@ -105,22 +108,22 @@ $ws-red: #ff4f5e;
   &.success {
     background: rgba(105, 227, 111, 0.1);
     border: 1px solid rgba(105, 227, 111, 0.3);
-    color: $ws-green;
+    color: var(--ws-green);
   }
 
   &.error {
     background: rgba(255, 79, 94, 0.1);
     border: 1px solid rgba(255, 79, 94, 0.3);
-    color: $ws-red;
+    color: var(--ws-red);
   }
 }
 
 // ─────────────────────────────────────────────
-// 统计卡母版
+// 统计卡
 // ─────────────────────────────────────────────
 .ws-status-cards {
   display: grid;
-  gap: $ws-card-gap;
+  gap: var(--ws-card-gap);
   flex-shrink: 0;
 }
 
@@ -133,38 +136,37 @@ $ws-red: #ff4f5e;
 }
 
 .ws-status-card {
-  background: $ws-bg-card;
-  border: 1px solid $ws-border-base;
-  border-radius: $ws-panel-radius;
-  padding: 10px 14px;
+  background: var(--ws-bg-panel);
+  border: 1px solid var(--ws-border);
+  border-radius: var(--ws-panel-radius);
+  padding: 6px 12px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
-  height: 72px;
+  min-height: 54px;
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
 }
 
 .ws-status-card:hover {
-  border-color: var(--accent-color, $ws-green);
+  border-color: var(--accent-color, var(--ws-cyan));
 }
 
-// 选中状态：背景轻微提亮 + 底部2px亮线，不使用完整白色边框
 .ws-status-card.active {
-  background: rgba(105, 227, 111, 0.08);
-  box-shadow: inset 0 -2px 0 var(--accent-color, $ws-green);
+  background: rgba(47, 156, 255, 0.08);
+  box-shadow: inset 0 -2px 0 var(--accent-color, var(--ws-cyan));
 }
 
 .ws-card-label {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: $ws-text-secondary;
-  line-height: 18px;
-  margin-bottom: 2px;
+  color: var(--ws-text-secondary);
+  line-height: 16px;
+  margin-bottom: 1px;
 }
 
 .ws-card-value-row {
@@ -174,36 +176,41 @@ $ws-red: #ff4f5e;
 }
 
 .ws-card-value {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
-  color: var(--accent-color, $ws-green);
-  line-height: 30px;
+  color: var(--accent-color, var(--ws-cyan));
+  line-height: 26px;
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum';
 }
 
 .ws-card-unit {
   font-size: 11px;
   font-weight: 400;
-  color: $ws-text-secondary;
+  color: var(--ws-text-secondary);
 }
 
-// 带图标的统计卡（审核管理、资料中心）
+.ws-card-subtext {
+  font-size: 11px;
+  color: var(--ws-text-muted);
+  line-height: 14px;
+  margin-top: 1px;
+}
+
 .ws-status-card.with-icon {
   flex-direction: row;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .ws-card-icon {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(105, 227, 111, 0.08);
-  color: var(--accent-color, $ws-green);
+  background: rgba(47, 156, 255, 0.1);
+  color: var(--accent-color, var(--ws-cyan));
   flex-shrink: 0;
 }
 
@@ -216,13 +223,13 @@ $ws-red: #ff4f5e;
 }
 
 // ─────────────────────────────────────────────
-// 面板基础样式
+// 面板 / 筛选条
 // ─────────────────────────────────────────────
 .ws-panel {
-  background: $ws-bg-panel;
-  border: 1px solid $ws-border-base;
-  border-radius: $ws-panel-radius;
-  padding: $ws-panel-pad;
+  background: var(--ws-bg-panel);
+  border: 1px solid var(--ws-border);
+  border-radius: var(--ws-panel-radius);
+  padding: var(--ws-panel-pad);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -232,7 +239,7 @@ $ws-red: #ff4f5e;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   flex-shrink: 0;
 }
 
@@ -242,27 +249,26 @@ $ws-red: #ff4f5e;
   gap: 6px;
   font-size: 14px;
   font-weight: 600;
-  color: $ws-text-primary;
+  color: var(--ws-text-primary);
 }
 
 .ws-panel-title-icon {
-  color: $ws-green;
+  color: var(--ws-cyan);
   flex-shrink: 0;
 }
 
 .ws-panel-count {
   font-size: 11px;
-  color: $ws-text-muted;
+  color: var(--ws-text-muted);
 }
 
-// 分组标题（统一绿色细竖线）
 .ws-section-title {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
-  color: $ws-text-primary;
+  color: var(--ws-text-primary);
   margin-bottom: 10px;
   flex-shrink: 0;
 
@@ -271,107 +277,344 @@ $ws-red: #ff4f5e;
     display: block;
     width: 3px;
     height: 14px;
-    background: $ws-green;
+    background: var(--ws-cyan);
     border-radius: 2px;
     flex-shrink: 0;
   }
 }
 
-// ─────────────────────────────────────────────
-// 表格母版
-// ─────────────────────────────────────────────
-.ws-table-container {
-  flex: 1;
+.ws-filter-bar {
+  background: var(--ws-bg-panel);
+  border: 1px solid var(--ws-border);
+  border-radius: var(--ws-panel-radius);
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
-  background: $ws-bg-panel;
-  border: 1px solid $ws-border-base;
-  border-radius: $ws-panel-radius;
+  gap: var(--ws-filter-gap);
+  flex-shrink: 0;
+}
+
+.ws-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: var(--ws-control-h);
+}
+
+.ws-filter-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ws-text-primary);
+}
+
+.ws-input,
+.ws-select,
+.ws-filter-bar select,
+.ws-filter-bar input[type='text'],
+.ws-filter-bar input[type='date'],
+.ws-filter-bar .filter-select,
+.ws-filter-bar .filter-input {
+  height: var(--ws-control-h);
+  padding: 0 10px;
+  background: var(--ws-bg-input);
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  color: var(--ws-text-primary);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+  min-width: 100px;
+}
+
+.ws-input::placeholder,
+.ws-filter-bar input::placeholder {
+  color: var(--ws-text-muted);
+}
+
+.ws-input-wrap,
+.ws-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--ws-control-h);
+  padding: 0 10px;
+  background: var(--ws-bg-input);
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  color: var(--ws-text-secondary);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.ws-input-wrap input,
+.ws-search-box input {
+  flex: 1;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--ws-text-primary);
+  font-size: 12px;
+  outline: none;
+  min-width: 0;
+}
+
+.ws-input-wrap input::placeholder,
+.ws-search-box input::placeholder {
+  color: var(--ws-text-muted);
+}
+
+// ─────────────────────────────────────────────
+// 表格
+// ─────────────────────────────────────────────
+.ws-table-container {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-bg-panel);
+  border: 1px solid var(--ws-border);
+  border-radius: var(--ws-panel-radius);
   overflow: hidden;
   min-height: 0;
 }
 
-.ws-table-header-wrapper {
-  flex-shrink: 0;
-  border-bottom: 1px solid $ws-border-base;
-}
-
-.ws-table-body-wrapper {
-  flex: 1;
-  overflow-y: auto;
+/*
+ * 单表滚动容器：thead+tbody 同表，列宽天然对齐。
+ * sticky thead 替代「表头表 + 表体表」双表方案（双表易因滚动条 gutter 错位）。
+ */
+.ws-table-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
   min-height: 0;
 }
 
-// 无滚动条模式（分页+完整显示）
-.ws-table-body-wrapper.no-scroll {
-  flex: 0 0 auto;
-  overflow-y: visible;
+/*
+ * ≤10 条/页：表体按内容高度，不出现表体滚动条。
+ * 必须允许 shrink（flex-shrink: 1），否则在 overflow:hidden 面板内
+ * 会把下方分页条裁切掉。
+ */
+.ws-table-scroll.no-scroll {
+  flex: 0 1 auto;
+  overflow-y: hidden;
+  min-height: 0;
+}
+
+/* 分页在容器内时：表体让出底部空间，分页始终可见 */
+.ws-table-container:has(> .ws-pagination-bar) > .ws-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ws-table-container:has(> .ws-pagination-bar) > .ws-table-scroll.no-scroll {
+  flex: 1 1 auto;
+  overflow-y: hidden;
+  min-height: 0;
 }
 
 .ws-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.ws-table th,
+.ws-table td {
+  text-align: left;
+  padding: 0 12px;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+.ws-table th:not(:last-child),
+.ws-table td:not(:last-child) {
+  border-right: 1px solid rgba(47, 156, 255, 0.1);
 }
 
 .ws-table th {
-  text-align: left;
-  padding: 9px 12px;
   font-size: 12px;
-  color: $ws-text-secondary;
+  color: var(--ws-text-secondary);
   font-weight: 500;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.22);
   white-space: nowrap;
-  height: $ws-table-header-h;
-  box-sizing: border-box;
+  height: var(--ws-table-header-h);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.ws-table thead {
+  border-bottom: 1px solid var(--ws-border);
 }
 
 .ws-table tbody tr {
   cursor: pointer;
   transition: background 0.2s;
+  height: var(--ws-table-row-h);
 }
 
 .ws-table tbody tr:hover {
-  background: rgba(105, 227, 111, 0.05);
+  background: rgba(47, 156, 255, 0.06);
 }
 
 .ws-table tbody tr.selected {
-  background: rgba(105, 227, 111, 0.1);
+  background: rgba(47, 156, 255, 0.1);
 }
 
 .ws-table td {
-  padding: 9px 12px;
   font-size: 13px;
-  color: $ws-text-primary;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
-  vertical-align: middle;
+  color: var(--ws-text-primary);
+  border-bottom: 1px solid var(--ws-border-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 名称类列：允许省略；时间列禁止 ellipsis（见下） */
+.ws-table td.col-task-name,
+.ws-table td.col-name,
+.ws-table td.col-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 截止 / 提交 / 上传时间：完整展示 YYYY-MM-DD HH:mm(:ss)，不加省略号 */
+.ws-table td.col-deadline,
+.ws-table th.col-deadline,
+.ws-table td.col-time,
+.ws-table th.col-time {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+/* 标签 / 状态列：内容左对齐贴表头，避免在宽格内视觉居中 */
+.ws-table td.col-module,
+.ws-table td.col-status,
+.ws-table th.col-module,
+.ws-table th.col-status {
+  text-align: left;
+}
+
+.ws-table td.col-module .module-tag,
+.ws-table td.col-module .ws-tag,
+.ws-table td.col-status .status-tag,
+.ws-table td.col-status .ws-tag {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+/* 进度列：进度条与文字统一左对齐 */
+.ws-table td.col-progress,
+.ws-table th.col-progress {
+  text-align: left;
+}
+
+.ws-table td.col-progress .ws-progress {
+  display: inline-flex;
+  width: 100%;
+  max-width: 140px;
+  vertical-align: middle;
+}
+
+.ws-table td.col-progress .ws-progress-bar {
+  flex: 1 1 auto;
+  min-width: 56px;
+  max-width: 80px;
+}
+
+/* 下一步 / 操作列：与表头左对齐 */
+.ws-table td.col-action,
+.ws-table th.col-action,
+.ws-table td.col-next,
+.ws-table th.col-next {
+  text-align: left;
+}
+
+.ws-table td.col-action .ws-btn,
+.ws-table td.col-next .ws-btn {
+  vertical-align: middle;
+}
+
+/*
+ * Home / Tasks 任务表列宽（~1100–1400px 内容区）
+ * checkbox 40 | 名称 remainder(~28–40%) | 模块 130 | 截止 176 | 进度 140 | 状态 96 | 下一步 120
+ */
+.home-table .ws-table,
+.tasks-table .ws-table {
+  col.col-check,
+  .col-check,
+  .checkbox-col {
+    width: 40px;
+  }
+
+  /* 名称列不设固定宽，吃剩余；固定列加总后约 28–40%，避免 ~60% 空洞 */
+  col.col-task-name,
+  .col-task-name {
+    width: auto;
+  }
+
+  col.col-module,
+  .col-module {
+    width: 130px;
+  }
+
+  col.col-deadline,
+  .col-deadline {
+    width: 176px;
+  }
+
+  col.col-progress,
+  .col-progress {
+    width: 140px;
+  }
+
+  col.col-status,
+  .col-status {
+    width: 96px;
+  }
+
+  col.col-next,
+  .col-next {
+    width: 120px;
+  }
+}
+
 // ─────────────────────────────────────────────
-// 分页栏母版
+// 分页
 // ─────────────────────────────────────────────
 .ws-pagination-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 14px;
+  padding: 6px 12px;
   background: rgba(5, 26, 50, 0.6);
-  border: 1px solid $ws-border-base;
+  border: 1px solid var(--ws-border);
   border-top: none;
-  border-radius: 0 0 $ws-panel-radius $ws-panel-radius;
+  border-radius: 0 0 var(--ws-panel-radius) var(--ws-panel-radius);
+  flex: 0 0 auto;
   flex-shrink: 0;
-  min-height: $ws-pagination-h;
+  margin-top: auto;
+  min-height: var(--ws-pagination-h);
   box-sizing: border-box;
+  position: relative;
+  z-index: 1;
+}
+
+/* 分页作为面板/列表区直接子节点（表体容器外）时，始终贴底且不被裁切 */
+.ws-panel > .ws-pagination-bar,
+.ws-table-container + .ws-pagination-bar {
+  flex: 0 0 auto;
+  margin-top: auto;
 }
 
 .ws-pagination-info {
   font-size: 12px;
-  color: $ws-text-secondary;
+  color: var(--ws-text-secondary);
 
   .highlight {
-    color: $ws-green;
+    color: var(--ws-cyan);
     font-weight: 600;
   }
 }
@@ -383,26 +626,32 @@ $ws-red: #ff4f5e;
 }
 
 .ws-page-btn {
-  padding: 4px 10px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
   background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  border: 1px solid var(--ws-border);
   border-radius: 4px;
-  color: $ws-text-primary;
+  color: var(--ws-text-primary);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ws-page-btn:hover:not(:disabled) {
-  border-color: $ws-green;
-  color: $ws-green;
+  border-color: var(--ws-cyan);
+  color: var(--ws-cyan);
 }
 
 .ws-page-btn.active {
-  background: rgba(105, 227, 111, 0.2);
-  border-color: $ws-green;
-  color: $ws-green;
+  background: rgba(47, 156, 255, 0.2);
+  border-color: var(--ws-cyan);
+  color: var(--ws-cyan);
+  font-weight: 600;
 }
 
 .ws-page-btn:disabled {
@@ -410,18 +659,13 @@ $ws-red: #ff4f5e;
   cursor: not-allowed;
 }
 
-.ws-page-ellipsis {
-  color: $ws-text-secondary;
-  font-size: 12px;
-  padding: 0 4px;
-}
-
 .ws-page-size-select {
+  height: 28px;
   background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  border: 1px solid var(--ws-border);
   border-radius: 4px;
-  padding: 4px 8px;
-  color: $ws-text-primary;
+  padding: 0 8px;
+  color: var(--ws-text-primary);
   font-size: 12px;
   outline: none;
   margin-left: 8px;
@@ -429,12 +673,12 @@ $ws-red: #ff4f5e;
 }
 
 // ─────────────────────────────────────────────
-// 右侧详情面板母版
+// 右侧详情面板
 // ─────────────────────────────────────────────
 .ws-detail-panel {
-  background: $ws-bg-panel;
-  border: 1px solid $ws-border-base;
-  border-radius: $ws-panel-radius;
+  background: var(--ws-bg-panel);
+  border: 1px solid var(--ws-border);
+  border-radius: var(--ws-panel-radius);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -446,19 +690,19 @@ $ws-red: #ff4f5e;
   align-items: center;
   gap: 8px;
   padding: 12px 14px;
-  border-bottom: 1px solid $ws-border-base;
+  border-bottom: 1px solid var(--ws-border);
   flex-shrink: 0;
 }
 
 .ws-detail-header-icon {
-  color: $ws-green;
+  color: var(--ws-cyan);
   flex-shrink: 0;
 }
 
 .ws-detail-title {
   font-size: 14px;
   font-weight: 600;
-  color: $ws-text-primary;
+  color: var(--ws-text-primary);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -484,15 +728,16 @@ $ws-red: #ff4f5e;
 .ws-detail-footer {
   flex-shrink: 0;
   padding: 10px 14px;
-  border-top: 1px solid $ws-border-base;
+  border-top: 1px solid var(--ws-border);
   background: rgba(5, 26, 50, 0.6);
 }
 
 // ─────────────────────────────────────────────
-// 按钮母版
+// 按钮：primary cyan / secondary ghost / danger|success outline
 // ─────────────────────────────────────────────
 .ws-btn {
-  padding: 8px 16px;
+  height: var(--ws-control-h);
+  padding: 0 16px;
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -502,98 +747,99 @@ $ws-red: #ff4f5e;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 6px;
+  box-sizing: border-box;
 }
 
-// 主操作：绿色
 .ws-btn-primary {
-  background: linear-gradient(135deg, $ws-green 0%, $ws-blue 100%);
+  background: var(--ws-primary-grad);
   color: #031020;
   font-weight: 600;
   border: none;
+  box-shadow: 0 0 0 1px rgba(47, 156, 255, 0.25);
 
   &:hover {
     opacity: 0.92;
-    transform: translateY(-1px);
   }
 
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    transform: none;
   }
 }
 
-// 办理操作：绿色描边
-.ws-btn-action {
-  background: rgba(105, 227, 111, 0.1);
-  border: 1px solid $ws-green;
-  color: $ws-green;
-
-  &:hover {
-    background: rgba(105, 227, 111, 0.18);
-  }
-}
-
-// 查看操作：蓝绿轻量
+.ws-btn-secondary,
 .ws-btn-view {
-  background: rgba(47, 156, 255, 0.1);
-  border: 1px solid rgba(47, 156, 255, 0.3);
-  color: #7fb6ef;
+  background: transparent;
+  border: 1px solid var(--ws-border-strong);
+  color: var(--ws-cyan-soft);
 
   &:hover {
-    background: rgba(47, 156, 255, 0.18);
-    color: #9ec8f5;
+    background: rgba(47, 156, 255, 0.1);
+    color: var(--ws-cyan);
   }
 }
 
-// 提醒操作：黄色
+.ws-btn-action {
+  background: transparent;
+  border: 1px solid rgba(47, 156, 255, 0.45);
+  color: var(--ws-cyan);
+
+  &:hover {
+    background: rgba(47, 156, 255, 0.12);
+  }
+}
+
+.ws-btn-success {
+  background: transparent;
+  border: 1px solid rgba(105, 227, 111, 0.45);
+  color: var(--ws-green);
+
+  &:hover {
+    background: rgba(105, 227, 111, 0.12);
+  }
+}
+
 .ws-btn-warn {
-  background: linear-gradient(135deg, $ws-yellow 0%, #ffd17a 100%);
-  color: #1a2a3a;
-  font-weight: 600;
-  border: none;
+  background: transparent;
+  border: 1px solid rgba(255, 179, 71, 0.5);
+  color: var(--ws-yellow);
 
   &:hover {
-    opacity: 0.92;
-    transform: translateY(-1px);
+    background: rgba(255, 179, 71, 0.12);
   }
 }
 
-// 风险操作：红色
 .ws-btn-danger {
-  background: rgba(255, 79, 94, 0.1);
-  border: 1px solid $ws-red;
-  color: $ws-red;
+  background: transparent;
+  border: 1px solid rgba(255, 79, 94, 0.5);
+  color: var(--ws-red);
 
   &:hover {
-    background: rgba(255, 79, 94, 0.18);
+    background: rgba(255, 79, 94, 0.12);
   }
 }
 
-// 次要操作：灰蓝色
-.ws-btn-secondary {
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  color: $ws-text-secondary;
-
-  &:hover {
-    background: rgba(105, 227, 111, 0.15);
-    color: $ws-green;
-  }
+.ws-btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 // ─────────────────────────────────────────────
-// 状态标签
+// Tags
 // ─────────────────────────────────────────────
-.ws-tag {
+.ws-tag,
+.module-tag,
+.status-tag {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 3px;
-  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+  line-height: 1.3;
 }
 
 .ws-tag-blue {
@@ -614,31 +860,24 @@ $ws-red: #ff4f5e;
   border: 1px solid rgba(166, 108, 255, 0.25);
 }
 
-.ws-tag-blue-purple {
-  background: rgba(99, 132, 255, 0.12);
-  color: #9eb2ff;
-  border: 1px solid rgba(99, 132, 255, 0.25);
-}
-
 .ws-tag-green {
   background: rgba(105, 227, 111, 0.12);
-  color: $ws-green;
+  color: var(--ws-green);
   border: 1px solid rgba(105, 227, 111, 0.25);
 }
 
 .ws-tag-red {
   background: rgba(255, 79, 94, 0.12);
-  color: $ws-red;
+  color: var(--ws-red);
   border: 1px solid rgba(255, 79, 94, 0.25);
 }
 
 .ws-tag-muted {
   background: rgba(143, 169, 200, 0.1);
-  color: $ws-text-secondary;
+  color: var(--ws-text-secondary);
   border: 1px solid rgba(143, 169, 200, 0.2);
 }
 
-// E/S/G 模块标签
 .ws-esg-tag {
   display: inline-flex;
   align-items: center;
@@ -651,19 +890,19 @@ $ws-red: #ff4f5e;
 
   &.esg-e {
     background: rgba(105, 227, 111, 0.15);
-    color: $ws-green;
+    color: var(--ws-green);
     border: 1px solid rgba(105, 227, 111, 0.3);
   }
 
   &.esg-s {
     background: rgba(47, 156, 255, 0.15);
-    color: $ws-blue;
+    color: var(--ws-cyan);
     border: 1px solid rgba(47, 156, 255, 0.3);
   }
 
   &.esg-g {
     background: rgba(166, 108, 255, 0.15);
-    color: $ws-purple;
+    color: var(--ws-purple);
     border: 1px solid rgba(166, 108, 255, 0.3);
   }
 }
@@ -676,6 +915,34 @@ $ws-red: #ff4f5e;
   justify-content: flex-end;
   gap: 12px;
   padding-top: 12px;
-  border-top: 1px solid $ws-border-base;
+  border-top: 1px solid var(--ws-border);
   flex-shrink: 0;
+}
+
+// ─────────────────────────────────────────────
+// 进度条（共用）
+// ─────────────────────────────────────────────
+.ws-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-progress-bar {
+  width: 80px;
+  height: 6px;
+  background: rgba(47, 156, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.ws-progress-fill {
+  height: 100%;
+  background: var(--ws-primary-grad);
+  border-radius: 3px;
+}
+
+.ws-progress-text {
+  font-size: 12px;
+  color: var(--ws-text-secondary);
 }

@@ -138,10 +138,10 @@ function showMessage(message: string, type: 'info' | 'success' | 'error' = 'info
 
 function formatTime(time: string): string {
   if (!time) return '-'
-  if (time.includes('T')) {
-    return time.replace('T', ' ').substring(0, 16)
-  }
-  return time.substring(0, 16)
+  const normalized = time.includes('T') ? time.replace('T', ' ') : time
+  // Prefer full YYYY-MM-DD HH:mm:ss when present; otherwise HH:mm
+  const match = normalized.match(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?/)
+  return match ? match[0].replace('T', ' ') : normalized
 }
 
 const currentPage = ref(1)
@@ -465,14 +465,7 @@ function getNextStepText(status: string): string {
 </script>
 
 <template>
-  <div class="workspace-review">
-    <div class="ws-page-header">
-      <div class="ws-page-title-group">
-        <div class="ws-page-title">审核管理</div>
-        <div class="ws-page-subtitle">审核资料任务并跟踪退回补正情况</div>
-      </div>
-    </div>
-
+  <div class="workspace-review ws-page">
     <div v-if="pageMessage" :class="['ws-page-message', pageMessageType]">
       {{ pageMessage }}
     </div>
@@ -503,8 +496,8 @@ function getNextStepText(status: string): string {
 
     <div class="main-content">
       <div class="left-section">
-        <div class="filter-panel">
-          <div class="filter-row">
+        <div class="ws-filter-bar filter-panel">
+          <div class="ws-filter-row filter-row">
             <div class="filter-item">
               <span class="filter-label">任务名称</span>
               <div class="filter-input-wrap">
@@ -531,7 +524,7 @@ function getNextStepText(status: string): string {
               </select>
             </div>
           </div>
-          <div class="filter-row">
+          <div class="ws-filter-row filter-row">
             <div class="filter-item">
               <span class="filter-label">提交日期</span>
               <div class="date-range">
@@ -562,7 +555,7 @@ function getNextStepText(status: string): string {
                 <input v-model="reviewerFilter" type="text" placeholder="请输入审核人" />
               </div>
             </div>
-            <button class="reset-btn" @click="handleReset">
+            <button class="ws-btn ws-btn-secondary" @click="handleReset">
               <RotateCcw :size="14" />
               重置
             </button>
@@ -570,7 +563,7 @@ function getNextStepText(status: string): string {
         </div>
 
         <div class="ws-table-container">
-          <div class="ws-table-header-wrapper">
+          <div class="ws-table-scroll" :class="{ 'no-scroll': pageSize <= 10 }">
             <table class="ws-table">
               <colgroup>
                 <col class="col-task-name" />
@@ -584,30 +577,16 @@ function getNextStepText(status: string): string {
               </colgroup>
               <thead>
                 <tr>
-                  <th>任务名称</th>
-                  <th>来源/关联事项</th>
-                  <th>ESG模块</th>
-                  <th>提交时间</th>
-                  <th>审核状态</th>
-                  <th>审核人</th>
-                  <th>审核意见摘要</th>
-                  <th>下一步</th>
+                  <th class="col-task-name">任务名称</th>
+                  <th class="col-source">来源/关联事项</th>
+                  <th class="col-module">ESG模块</th>
+                  <th class="col-time">提交时间</th>
+                  <th class="col-status">审核状态</th>
+                  <th class="col-reviewer">审核人</th>
+                  <th class="col-comment">审核意见摘要</th>
+                  <th class="col-action">下一步</th>
                 </tr>
               </thead>
-            </table>
-          </div>
-          <div class="ws-table-body-wrapper">
-            <table class="ws-table">
-              <colgroup>
-                <col class="col-task-name" />
-                <col class="col-source" />
-                <col class="col-module" />
-                <col class="col-time" />
-                <col class="col-status" />
-                <col class="col-reviewer" />
-                <col class="col-comment" />
-                <col class="col-action" />
-              </colgroup>
               <tbody>
                 <tr
                   v-for="record in paginatedRecords"
@@ -670,29 +649,29 @@ function getNextStepText(status: string): string {
               </tbody>
             </table>
           </div>
+        </div>
 
-          <div class="ws-pagination-bar">
-            <div class="ws-pagination-info">
-              共 <span class="highlight">{{ filteredRecords.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
-            </div>
-            <div class="ws-pagination-controls">
-              <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
-                <option :value="10">10 条/页</option>
-                <option :value="20">20 条/页</option>
-                <option :value="30">30 条/页</option>
-              </select>
-              <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
-              <button
-                v-for="p in getPageNumbers()"
-                :key="p"
-                class="ws-page-btn"
-                :class="{ active: currentPage === p }"
-                @click="goToPage(p)"
-              >
-                {{ p }}
-              </button>
-              <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
-            </div>
+        <div class="ws-pagination-bar">
+          <div class="ws-pagination-info">
+            共 <span class="highlight">{{ filteredRecords.length }}</span> 条记录，第 {{ currentPage }}/{{ totalPages }} 页
+          </div>
+          <div class="ws-pagination-controls">
+            <select v-model.number="pageSize" class="ws-page-size-select" @change="changePageSize(pageSize)">
+              <option :value="10">10 条/页</option>
+              <option :value="20">20 条/页</option>
+              <option :value="30">30 条/页</option>
+            </select>
+            <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+            <button
+              v-for="p in getPageNumbers()"
+              :key="p"
+              class="ws-page-btn"
+              :class="{ active: currentPage === p }"
+              @click="goToPage(p)"
+            >
+              {{ p }}
+            </button>
+            <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">下一页</button>
           </div>
         </div>
       </div>
@@ -923,17 +902,12 @@ function getNextStepText(status: string): string {
 
 <style scoped>
 .workspace-review {
-  padding: 14px 16px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: hidden;
+  min-height: 0;
 }
 
 .main-content {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
 }
@@ -943,6 +917,19 @@ function getNextStepText(status: string): string {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  gap: var(--ws-section-gap, 8px);
+}
+
+.left-section > .ws-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.left-section > .ws-table-container + .ws-pagination-bar {
+  flex: 0 0 auto;
+  margin-top: calc(-1 * var(--ws-section-gap, 12px));
 }
 
 .right-section {
@@ -951,22 +938,25 @@ function getNextStepText(status: string): string {
 }
 
 .filter-panel {
-  background: rgba(5, 26, 50, 0.8);
-  border: 1px solid rgba(105, 227, 111, 0.1);
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
+  /* chrome from .ws-filter-bar */
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: 0;
   flex-shrink: 0;
+  gap: 6px;
 }
 
 .filter-row {
+  /* spacing from .ws-filter-row */
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 .filter-row + .filter-row {
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .filter-item {
@@ -1063,36 +1053,37 @@ function getNextStepText(status: string): string {
   table-layout: fixed;
 }
 
+/* Review 列宽：名称/意见吃剩余；时间列保证完整 datetime */
 .col-task-name {
-  width: 18%;
+  width: auto;
 }
 
 .col-source {
-  width: 18%;
+  width: 160px;
 }
 
 .col-module {
-  width: 12%;
+  width: 130px;
 }
 
 .col-time {
-  width: 11%;
+  width: 176px;
 }
 
 .col-status {
-  width: 9%;
+  width: 96px;
 }
 
 .col-reviewer {
-  width: 8%;
+  width: 88px;
 }
 
 .col-comment {
-  width: 16%;
+  width: 18%;
 }
 
 .col-action {
-  width: 8%;
+  width: 120px;
 }
 
 .task-name-text {
@@ -1153,7 +1144,7 @@ function getNextStepText(status: string): string {
 }
 
 .ws-table td.col-action {
-  text-align: center;
+  text-align: left;
 }
 
 .next-step-btn {
@@ -1517,23 +1508,23 @@ function getNextStepText(status: string): string {
   flex: 1;
 }
 
-.ws-table-body-wrapper::-webkit-scrollbar,
+.ws-table-scroll::-webkit-scrollbar,
 .ws-detail-content::-webkit-scrollbar {
   width: 6px;
 }
 
-.ws-table-body-wrapper::-webkit-scrollbar-track,
+.ws-table-scroll::-webkit-scrollbar-track,
 .ws-detail-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.ws-table-body-wrapper::-webkit-scrollbar-thumb,
+.ws-table-scroll::-webkit-scrollbar-thumb,
 .ws-detail-content::-webkit-scrollbar-thumb {
   background: rgba(105, 227, 111, 0.2);
   border-radius: 3px;
 }
 
-.ws-table-body-wrapper::-webkit-scrollbar-thumb:hover,
+.ws-table-scroll::-webkit-scrollbar-thumb:hover,
 .ws-detail-content::-webkit-scrollbar-thumb:hover {
   background: rgba(105, 227, 111, 0.3);
 }
