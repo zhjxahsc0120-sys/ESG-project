@@ -5,6 +5,7 @@
 | **日期** | 2026-07-26 |
 | **分支** | `trae/workspace-nav-s02s03` |
 | **Tag** | `baseline/workspace-ui-20260726` |
+| **Commit** | `38385dc47e4ea612fbdeb02694534748140657b0` |
 | **用途** | Workspace UI 打磨快照；后续「右侧碳与月报」Trae 工作的**开工基线**与回退点 |
 
 ## 与旧基线共存

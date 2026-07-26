@@ -18,7 +18,7 @@
 
 ## 0. 背景
 
-1. 用户要求在 **数据填报（Workspace）右侧**增加与首页同源的**碳相关模块**与**月报模块**，服务填报场景一眼看碳 / 月报进度。
+1. 用户要求在 **数据填报（Workspace）右侧**增加与首页同源的**碳相关模块**与**月报模块**。
 2. 上一 sprint「数据填报页续作」可能并行收尾；**本单为当前主任务**。若续作未合入，实施时**勿回退**已落地的五 Tab / 真解析能力。
 3. 设计结论：**仅填报概览**右栏；保留紧凑助手；碳 + 月报各一张 `.ws-panel`；今日重点降级 ≤2 条；点击由 `WorkspacePage` 宿主挂载既有 E04 / 月报模态。
 
@@ -28,10 +28,10 @@
 
 | 动作 | 命令 / 要求 |
 |------|-------------|
-| 开工前对齐 | 从含 tag `baseline/workspace-ui-20260726` 的分支创建实施分支（或 `git switch --detach` 检视后切回分支开工） |
+| 开工前对齐 | 从含 tag `baseline/workspace-ui-20260726` 的分支创建实施分支 |
 | 破损回退 | `git switch --detach baseline/workspace-ui-20260726`（详见 `_handoff/BASELINE_Workspace_UI_20260726.md`） |
 | 首页回退 | 仍用 `baseline/l1-l2-gis-20260726`；**禁止删除或覆盖该 tag** |
-| 格式 | 必须与当前 Workspace UI 统一（`.ws-panel` / `.ws-btn-*` / `--ws-*`）；**禁止新视觉语言** |
+| 版式 | 必须与当前 Workspace UI 统一（`.ws-panel` / `.ws-btn-*` / `--ws-*`）；**禁止新视觉语言** |
 
 ---
 
@@ -43,11 +43,11 @@
 |---|------|
 | R1 | **禁止改动** `src/views/DashboardPage.vue` |
 | R2 | **禁止改动** GIS / `src/modules/traffic-gis-overview/**` |
-| R3 | **禁止改动** e01 / e02 / e03 / s02 业务与文案（及对应 L1/L2 工作台核心） |
-| R4 | **禁止改动** `HeaderNav.vue` 结构与样式；勿改 `navItems`「统一视觉」 |
-| R5 | **禁止改动** 首页右栏面板**源码重写**：`CarbonBenefitPanel.vue`、`MonthlyReportPanel.vue`、Master 碳/月报组件（可 **read/reuse API** 与只读 import 模态，不得改面板内部） |
-| R6 | **禁止改动** S01–G04 等 KPI 模态内部业务（含 S01–S04、G01–G04）；本单仅允许 Workspace 宿主 **open/close** 既有 E04 / Monthly 模态 |
-| R7 | **禁止回归破坏** `baseline/l1-l2-gis-20260726` 保护的首页完整度 |
+| R3 | **禁止改动** e01 / e02 / e03 / s02 业务与文案 |
+| R4 | **禁止改动** `HeaderNav.vue` 结构与样式 |
+| R5 | **禁止改动** 首页右栏面板**源码重写**：`CarbonBenefitPanel.vue`、`MonthlyReportPanel.vue`（可 **read/reuse API**，不得改面板内部） |
+| R6 | **禁止改动** S01–G04 等 KPI 模态内部业务；仅允许 Workspace 宿主 **open/close** 既有 E04 / Monthly 模态 |
+| R7 | **禁止回归破坏** `baseline/l1-l2-gis-20260726` |
 
 ### 1.2 FORBIDDEN — ESG 智能助手
 
@@ -61,7 +61,7 @@
 | # | 禁止 |
 |---|------|
 | R10 | **禁止改动** `layout.scss`、`tokens.scss` 全局壳层 / 全局 tokens |
-| R11 | **禁止**新视觉语言（新色板、新卡片体系、非 Workspace token 的 glow/紫系皮肤等） |
+| R11 | **禁止**新视觉语言 |
 | R12 | UI **禁止**「演示 / 测试 / 未确认」chrome |
 | R13 | **不要**改五 Tab 结构或把五项挂进平台顶栏 |
 | R14 | **不要**在 tasks / smart-upload / review / documents 挂本右轨 |
@@ -76,14 +76,13 @@
 | `src/views/WorkspacePage.vue` | 宿主挂载 E04 / Monthly 模态；接收 emit |
 | `src/components/workspace/**` | Home 右栏编排；新建 `WorkspaceCarbonSummary.vue` / `WorkspaceMonthlySummary.vue` 等 |
 | `src/styles/workspace.scss` | **仅**右栏摘要卡局部样式；复用 `.ws-panel` / `.ws-btn-*` / `--ws-*` |
-| `src/services/api.ts` | **薄**客户端：复用/微调已有 `getDashboardPanels`、`getMonthlyReportReadiness`、topic、E04 client；**禁止新 schema**；禁止顺手改 GIS/E01–E03 API |
+| `src/services/api.ts` | **薄**客户端：复用已有 panels / readiness / topic / E04 client；**禁止新 schema** |
 | `src/types/workspace.ts` | 仅 emit/props 类型需要时 |
 | `src/data/workspace.mock.ts` | 仅今日重点条数/文案降级需要时 |
 
-**只读复用（可 import，不改文件）：**  
-`E04CarbonEmissionModal`、`MonthlyReportModal`、dashboard/monthly mock（仅回落）、`monthly-readiness` 校验工具。
+**只读复用（可 import，不改文件）：** `E04CarbonEmissionModal`、`MonthlyReportModal`、dashboard/monthly mock（仅回落）、`monthly-readiness` 校验工具。
 
-**后端：** 本单默认不改 `server/**`。确需修补须先停工确认；**禁止新 schema / 碳主值迁移**。
+**后端：** 本单默认不改 `server/**`。确需补补须先停工确认；**禁止新 schema / 碳主值迁移**。
 
 ---
 
@@ -112,7 +111,7 @@
 
 | ID | 动作 | 完成标准 |
 |----|------|----------|
-| M-1 | 紧凑 `.ws-panel`：期次、归集率%、已归集 n/m、三态计数、截止区间 | 同源 readiness（默认期次与 store 一致） |
+| M-1 | 紧凑 `.ws-panel`：期次、归集率%、已归集 n/m、三态计数、截止区间 | 同源 readiness |
 | M-2 | 待处理最多 3 条：`taskName` + `monthlyStatus` | 来自 `exceptionTasks` |
 | M-3 | 「查看月报准备」→ 既有 `MonthlyReportModal` + topic API | 不改首页面板 |
 
@@ -126,37 +125,20 @@
 
 ### 3.4 Out of Scope
 
-- 复刻首页 RingChart / 减排措施整板 / 月报双栏大表  
-- 全 Tab 右轨、第六 Tab、Header 入口  
-- 助手 DB 问答、Dashboard/GIS、碳主值迁移  
-- 续作单中的审核文档 6 列卡等（非本单阻塞）
+- 复刻首页 RingChart / 减排措施整板 / 月报双栏大表
+- 全 Tab 右轨、第六 Tab、Header 入口
+- 助手 DB 问答、Dashboard/GIS、碳主值迁移
 
 ---
 
 ## 4. 验收清单
-
-### 4.1 红线抽检
 
 | # | 查 | 期望 |
 |---|-----|------|
 | H1 | `git diff` | **无** DashboardPage / GIS / assistant / HeaderNav / CarbonBenefitPanel·MonthlyReportPanel 源码改写 / layout&tokens 全局 / S01–G04 模态业务 |
 | H2 | 样式 | 仅 `workspace.scss` + 现有 ws 组件类；无新视觉语言 |
 | H3 | 基线 | 从 `baseline/workspace-ui-20260726` 开工；未破坏 `baseline/l1-l2-gis-20260726` |
-
-### 4.2 功能
-
-| # | 查 | 期望 |
-|---|-----|------|
-| W1 | `/#/workspace` 右栏 | 助手 + 碳 + 月报 + 今日重点(≤2) |
-| W2 | 碳数据 | 与 `GET /api/dashboard/panels` carbon 一致；无手工 6175 |
-| W3 | 月报数据 | 与 readiness 接口一致 |
-| W4 | 下钻 | 两按钮打开既有模态并可关闭 |
-| W5 | 其它 Tab | 无本右轨；五 Tab 仍在 |
-| W6 | 文案 | 无演示/测试/未确认 chrome |
-
-### 4.3 编译
-
-见 §5。
+| W1–W6 | 功能 | 右栏栈序、同源数据、下钻模态、其它 Tab 无本轨、无演示 chrome |
 
 ---
 
@@ -168,46 +150,21 @@ npm run check
 npm run build
 ```
 
-若例外改动了任何 Python（默认不应）：
-
-```bash
-python -m compileall -q server
-```
-
-**点击验收（最低）：**
-
-1. `/#/workspace`：右栏四段栈序正确；碳/月报有数  
-2. 「查看核算」→ E04 类模态；关闭后回填报概览  
-3. 「查看月报准备」→ 月报模态  
-4. 其它 Tab：**无**碳/月报右轨  
-5. 大屏首页碳/月报面板：本分支**未改坏**（对照 `baseline/l1-l2-gis-20260726`）
+**点击验收（最低）：** `/#/workspace` 右栏四段；两按钮打开既有模态；其它 Tab 无右轨；首页碳/月报未改坏。
 
 ---
 
-## 6. 交付包约定
+## 6. 交付与 DoD
 
-建议目录：`交付_Workspace右侧碳与月报/`
+建议目录：`交付_Workspace右侧碳与月报/` — 变更列表、交付说明、可选截图。  
+**分支建议：** `trae/<issue>-workspace-right-carbon-monthly`；不向 `main` 直推。
 
-1. 变更文件列表（对照白名单）  
-2. 交付说明：完成项；panels/readiness mock vs API；验证结果；声明未改 Dashboard/GIS/Assistant/HeaderNav/首页右栏源码  
-3. 可选截图  
-4. 已知未做项  
-
-**分支建议：** `trae/<issue>-workspace-right-carbon-monthly`  
-**PR：** 引用 Issue；按 `AGENTS.md`；不向 `main` 直推。
+- [ ] §1 红线未破；版式统一 Workspace
+- [ ] §3 全部完成；§4/§5 通过
+- [ ] 交付包完整；无 scope 蔓延
 
 ---
 
-## 7. 完成定义（DoD）
-
-- [ ] §1 红线未破；格式统一 Workspace  
-- [ ] §3 全部完成  
-- [ ] §4 验收通过；§5 命令通过（或例外已记录）  
-- [ ] 交付包完整  
-- [ ] 无产品代码外 scope 蔓延  
-
----
-
-## 8. 给 Trae 的一句话
+## 7. 给 Trae 的一句话
 
 > **从 `baseline/workspace-ui-20260726` 开工**：只在 Workspace 填报概览右栏加碳/月报两张紧凑 `.ws-panel`（panels + readiness，宿主挂既有模态）；**Dashboard / GIS / e01–e03/s02 / HeaderNav / Assistant / layout·tokens / 首页 CarbonBenefitPanel 源码 / S01–G04 模态一律不许碰**；破损回退该 tag。
