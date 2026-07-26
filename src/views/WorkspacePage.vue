@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import HeaderNav from '@/components/layout/HeaderNav.vue'
 import WorkspaceNav from '@/components/workspace/WorkspaceNav.vue'
 import WorkspaceHome from '@/components/workspace/WorkspaceHome.vue'
 import WorkspaceTasks from '@/components/workspace/WorkspaceTasks.vue'
@@ -10,10 +12,23 @@ import TaskModal from '@/components/workspace/TaskModal.vue'
 import { uploadTasks } from '@/data/workspace.mock'
 import type { UploadTask } from '@/types/workspace'
 
+const route = useRoute()
+const router = useRouter()
+
 const activeNav = ref('workspace')
 const selectedStatus = ref('')
 const selectedTaskId = ref<string | null>(null)
 const forceTab = ref<string>('')
+
+// 从 URL query ?t= 同步初始 Tab
+function syncTabFromQuery() {
+  const t = route.query.t as string | undefined
+  if (t && ['workspace', 'tasks', 'smart-upload', 'review', 'documents'].includes(t)) {
+    activeNav.value = t
+  }
+}
+
+syncTabFromQuery()
 
 const currentTask = computed(() => {
   if (!selectedTaskId.value) return null
@@ -38,6 +53,8 @@ function handleNavigate(key: string, status?: string) {
   } else {
     selectedStatus.value = ''
   }
+  // 同步 ?t= 深链
+  router.replace({ query: { t: key } })
 }
 
 function handleOpenTask(taskId: string, tab?: string) {
@@ -49,12 +66,32 @@ function handleCloseModal() {
   selectedTaskId.value = null
   forceTab.value = ''
 }
+
+function handlePlatformNav(key: string) {
+  if (key === 'dashboard') {
+    router.push('/')
+  } else if (key === 'assistant') {
+    router.push('/assistant')
+  } else if (key === 'workspace') {
+    // already here
+  }
+}
+
+watch(() => route.query.t, () => {
+  syncTabFromQuery()
+})
 </script>
 
 <template>
   <div class="workspace-page">
+    <!-- 平台统一 HeaderNav（80px） -->
+    <div class="workspace-header-nav">
+      <HeaderNav active-key="workspace" @navigate="handlePlatformNav" />
+    </div>
+
+    <!-- 二级 Tab -->
     <WorkspaceNav :active-nav="activeNav" @navigate="handleNavigate" />
-    
+
     <main class="workspace-main">
       <WorkspaceHome
         v-if="activeNav === 'workspace'"
@@ -93,6 +130,11 @@ function handleCloseModal() {
   flex-direction: column;
   height: 100%;
   background: linear-gradient(180deg, #020b18 0%, #051a32 100%);
+}
+
+.workspace-header-nav {
+  height: var(--dashboard-header-h, 80px);
+  flex: 0 0 var(--dashboard-header-h, 80px);
 }
 
 .workspace-main {

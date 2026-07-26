@@ -1,844 +1,845 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
-import { Check, ShieldCheck, X } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import * as echarts from 'echarts'
+import { Check, Clock, FileCheck, ShieldCheck, X, AlertCircle } from 'lucide-vue-next'
 import { getDashboardKpiS01 } from '@/services/api'
+
+// S 组业务主色：蓝色（与 E 组绿色、G 组紫色区分）
+const THEME_COLOR = '#2f9cff'
+const THEME_RGB = '47, 156, 255'
+
+// 语义状态色（不跟随 S 组主色）
+const STATUS_COLORS = {
+  normal: '#69e36f',     // 正常、已完成、已闭环：绿色
+  processing: '#2f9cff', // 处理中、办理中：蓝色
+  pending: '#ffb347',    // 待处理、临期、提醒：橙色
+  danger: '#ff4f5e',     // 逾期、异常、高风险：红色
+  muted: '#8ba6c3',     // 次要文字、暂无数据：灰色
+} as const
 
 type CountingStatus = 'continuous' | 'interrupted' | 'pending'
 
 interface SafetyProductionData {
   projectStartDate: string
   currentDate: string
+  continuousDays?: number
   currentStage: string
   currentStageDetail: string
   countingStatus: CountingStatus
   latestInterruptDate?: string
   latestInterruptReason?: string
   updateTime: string
+  timeline?: {
+    startLabel: string
+    startDate: string
+    message: string
+    endLabel: string
+    endDate: string
+    months: string[]
+  }
+  constructionStages?: {
+    id: string
+    name: string
+    status: 'completed' | 'current' | 'not_started'
+    detail?: string
+    startDate?: string
+    endDate?: string
+  }[]
+  conclusion?: string
 }
 
-interface ConstructionStage {
-  id: string
-  name: string
-  status: 'completed' | 'current' | 'not_started'
-  detail?: string
-  startDate?: string
-  endDate?: string
-}
+const emit = defineEmits<{ (e: 'close'): void }>()
 
-const emit = defineEmits<{
-  (e: 'close'): void
-}>()
+const isAcceptanceMode = new URLSearchParams(window.location.search).get('acceptance') === '1'
+const modalRef = ref<HTMLDivElement | null>(null)
+const chartRef = ref<HTMLDivElement | null>(null)
+const scale = ref(1)
+let chart: echarts.ECharts | null = null
 
-const mockSafetyProductionData: SafetyProductionData = {
+const data = ref<SafetyProductionData>({
   projectStartDate: '2025-07-10',
   currentDate: '2026-07-13',
-  currentStage: '主体工程施工',
+  currentStage: '路基桥涵施工',
   currentStageDetail: '路基｜桥梁｜隧道并行施工',
   countingStatus: 'continuous',
   updateTime: '2026-07-13 10:30',
-}
-
-const mockConstructionStages: ConstructionStage[] = [
-  {
-    id: 'preparation',
-    name: '施工准备',
-    status: 'completed',
-  },
-  {
-    id: 'main-construction',
-    name: '主体工程施工',
-    status: 'current',
-    detail: '路基｜桥梁｜隧道并行施工',
-  },
-  {
-    id: 'pavement',
-    name: '路面及附属工程',
-    status: 'not_started',
-  },
-  {
-    id: 'handover',
-    name: '交工验收',
-    status: 'not_started',
-  },
-]
-
-const safetyProductionData = ref<SafetyProductionData>(mockSafetyProductionData)
-const constructionStages = ref<ConstructionStage[]>(mockConstructionStages)
-const conclusionText = ref('项目开工以来，未发生导致连续安全生产记录中断的事故，当前已连续安全生产368天。')
-
-const showAccidentToast = ref(false)
-let accidentToastTimer: ReturnType<typeof setTimeout> | null = null
+  constructionStages: [],
+  conclusion: '项目开工以来，暂无导致连续安全生产计数中断的事故记录，当前连续安全生产368天。',
+})
 
 function toUtcDate(dateText: string) {
   const [year, month, day] = dateText.split('-').map(Number)
   return Date.UTC(year, month - 1, day)
 }
 
-function calculateContinuousDays(data: SafetyProductionData) {
-  const cycleStartDate = data.latestInterruptDate ?? data.projectStartDate
-  const start = toUtcDate(cycleStartDate)
-  const current = toUtcDate(data.currentDate)
-  return Math.max(0, Math.floor((current - start) / 86_400_000))
+// 主值只信 API continuousDays（与首页 S01 / _resolve_s01_snapshot 同源）；无值时不前端重算
+const continuousDays = computed(() => {
+  if (typeof data.value.continuousDays === 'number') return data.value.continuousDays
+  return null
+})
+
+function mapCountingStatus(raw: string | null | undefined): CountingStatus {
+  const s = (raw || '').toUpperCase()
+  if (s === 'RESET_CYCLE' || s === 'INTERRUPTED') return 'interrupted'
+  if (s === 'PENDING_DETERMINATION' || s === 'PENDING') return 'pending'
+  return 'continuous'
 }
-
-function buildMonthTicks(startDate: string, endDate: string) {
-  const [startYear, startMonth] = startDate.split('-').map(Number)
-  const [endYear, endMonth] = endDate.split('-').map(Number)
-  const ticks: string[] = []
-  let year = startYear
-  let month = startMonth
-
-  while (year < endYear || (year === endYear && month <= endMonth)) {
-    ticks.push(`${year}-${String(month).padStart(2, '0')}`)
-    month += 1
-    if (month > 12) {
-      month = 1
-      year += 1
-    }
-  }
-
-  return ticks
-}
-
-const continuousDays = computed(() => calculateContinuousDays(safetyProductionData.value))
-const monthTicks = computed(() => buildMonthTicks(safetyProductionData.value.projectStartDate, safetyProductionData.value.currentDate))
 
 const statusLabel = computed(() => {
-  if (safetyProductionData.value.countingStatus === 'interrupted') return '计数中断'
-  if (safetyProductionData.value.countingStatus === 'pending') return '待复核'
+  if (data.value.countingStatus === 'interrupted') return '计数中断'
+  if (data.value.countingStatus === 'pending') return '待复核'
   return '连续计数中'
 })
 
-const statusClass = computed(() => safetyProductionData.value.countingStatus)
+const statusColor = computed(() => {
+  if (data.value.countingStatus === 'interrupted') return STATUS_COLORS.danger
+  if (data.value.countingStatus === 'pending') return STATUS_COLORS.pending
+  return STATUS_COLORS.normal
+})
+
+// 月度累计安全生产天数（基于开工日期可证明推导，与 continuousDays 口径一致）
+const monthlyCumulative = computed(() => {
+  if (!data.value.projectStartDate || !data.value.currentDate) {
+    return [] as { month: string; cumulative: number }[]
+  }
+  const startDate = new Date(toUtcDate(data.value.projectStartDate))
+  const endDate = new Date(toUtcDate(data.value.currentDate))
+  const result: { month: string; cumulative: number }[] = []
+  let total = 0
+  let year = startDate.getUTCFullYear()
+  let month = startDate.getUTCMonth() + 1
+
+  while (year < endDate.getUTCFullYear() || (year === endDate.getUTCFullYear() && month <= endDate.getUTCMonth() + 1)) {
+    const monthStart = (year === startDate.getUTCFullYear() && month === startDate.getUTCMonth() + 1)
+      ? Date.UTC(year, month - 1, startDate.getUTCDate())
+      : Date.UTC(year, month - 1, 1)
+    const nextMonthStart = (year === endDate.getUTCFullYear() && month === endDate.getUTCMonth() + 1)
+      ? Date.UTC(year, month - 1, endDate.getUTCDate())
+      : Date.UTC(year, month, 1)
+    const daysThisMonth = Math.max(0, Math.floor((nextMonthStart - monthStart) / 86_400_000))
+    total += daysThisMonth
+    result.push({ month: `${year}-${String(month).padStart(2, '0')}`, cumulative: total })
+    month += 1
+    if (month > 12) { month = 1; year += 1 }
+  }
+
+  return result
+})
+
+const summaryCards = computed(() => [
+  {
+    label: '连续安全生产天数',
+    value: continuousDays.value === null ? '--' : String(continuousDays.value),
+    unit: continuousDays.value === null ? '' : '天',
+    color: continuousDays.value === null ? STATUS_COLORS.muted : STATUS_COLORS.normal,
+  },
+  { label: '开工日期', value: data.value.projectStartDate || '--', unit: '', color: THEME_COLOR },
+  { label: '统计截止', value: data.value.currentDate || '--', unit: '', color: THEME_COLOR },
+  { label: '计数状态', value: statusLabel.value, unit: '', color: statusColor.value },
+  { label: '当前工期阶段', value: data.value.currentStage || '--', unit: '', color: STATUS_COLORS.processing },
+])
+
+function initChart() {
+  if (!chartRef.value) return
+  chart?.dispose()
+  chart = echarts.init(chartRef.value)
+  const monthly = monthlyCumulative.value
+  chart.setOption({
+    animation: !isAcceptanceMode,
+    animationDuration: 450,
+    tooltip: {
+      trigger: 'axis',
+      textStyle: { fontSize: 13 },
+      formatter: (params: any[]) => [params[0]?.axisValue ?? '', `累计安全生产：${params[0]?.value ?? 0} 天`].join('<br/>'),
+    },
+    grid: { left: 62, right: 24, top: 30, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: monthly.map(item => item.month.replace(/^\d{4}-/, '') + '月'),
+      axisLine: { lineStyle: { color: 'rgba(143,169,200,.28)' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#8fa9c8', fontSize: 13, margin: 14 },
+    },
+    yAxis: {
+      type: 'value',
+      name: '累计天数',
+      nameTextStyle: { color: '#8fa9c8', fontSize: 13 },
+      axisLabel: { color: '#8fa9c8', fontSize: 13 },
+      splitLine: { lineStyle: { color: 'rgba(143,169,200,.09)' } },
+    },
+    series: [
+      {
+        name: '累计安全生产天数',
+        type: 'line',
+        symbol: 'circle',
+        symbolSize: 7,
+        smooth: true,
+        lineStyle: { width: 2, color: THEME_COLOR },
+        itemStyle: { color: THEME_COLOR },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: `rgba(${THEME_RGB}, 0.28)` },
+            { offset: 1, color: `rgba(${THEME_RGB}, 0)` },
+          ]),
+        },
+        data: monthly.map(item => item.cumulative),
+      },
+    ],
+  })
+}
+
+function updateScale() {
+  scale.value = Math.min(1, window.innerWidth / 1920, window.innerHeight / 1080)
+}
+
+function handleResize() { updateScale(); chart?.resize() }
+function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') emit('close') }
+function handleOverlayClick(event: MouseEvent) { if (event.target === event.currentTarget) emit('close') }
+
+const stageStatusText = (status: string) => status === 'completed' ? '已完成' : status === 'current' ? '进行中' : '未开始'
+const stageStatusColor = (status: string) => status === 'completed' ? STATUS_COLORS.normal : status === 'current' ? STATUS_COLORS.processing : STATUS_COLORS.muted
+const stageStatusClass = (status: string) => status === 'completed' ? 'completed' : status === 'current' ? 'current' : 'pending'
+
+const countingRules = [
+  { label: '起始时间', value: '开工日期' },
+  { label: '统计截止', value: '当前日期' },
+  { label: '计数口径', value: '项目开工以来' },
+  { label: '中断条件', value: '发生导致连续记录中断的生产安全责任事故', multiline: true },
+  { label: '当前状态', value: '连续计数中' },
+]
 
 async function loadData() {
-  const data = await getDashboardKpiS01()
-  if (data) {
-    safetyProductionData.value = {
-      projectStartDate: data.projectStartDate,
-      currentDate: data.currentDate,
-      currentStage: data.currentStage,
-      currentStageDetail: data.currentStageDetail,
-      countingStatus: data.countingStatus as CountingStatus,
-      updateTime: data.updateTime,
-    }
-    if (data.constructionStages) {
-      constructionStages.value = data.constructionStages.map(s => ({
-        id: s.id,
-        name: s.name,
-        status: s.status === 'current' ? 'current' : s.status === 'completed' ? 'completed' : 'not_started',
-        detail: s.detail,
-      }))
-    }
-    if (data.conclusion) {
-      conclusionText.value = data.conclusion
-    }
+  const resp = await getDashboardKpiS01()
+  if (!resp) return
+  const start =
+    resp.statisticsStart ||
+    resp.cycleStartDate ||
+    resp.projectStartDate ||
+    data.value.projectStartDate
+  const asOf = resp.statisticsAsOf || resp.currentDate || data.value.currentDate
+  data.value = {
+    projectStartDate: start || '--',
+    currentDate: asOf || '--',
+    continuousDays: typeof resp.continuousDays === 'number' ? resp.continuousDays : undefined,
+    currentStage: resp.currentConstructionStage || resp.currentStage || '资料待补齐',
+    currentStageDetail: resp.currentStageDetail || '',
+    countingStatus: mapCountingStatus(resp.countingStatus),
+    latestInterruptDate: resp.latestInterruptDate || undefined,
+    latestInterruptReason: resp.latestInterruptReason || undefined,
+    updateTime: resp.updateTime || '--',
+    timeline: resp.timeline,
+    constructionStages: (resp.constructionStages || []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      status: (s.status === 'completed' || s.status === 'current' || s.status === 'not_started'
+        ? s.status
+        : 'not_started') as 'completed' | 'current' | 'not_started',
+      detail: s.detail,
+      startDate: s.startDate,
+      endDate: s.endDate,
+    })),
+    conclusion: resp.conclusion,
   }
 }
 
-function handleViewAccidentRecords() {
-  showAccidentToast.value = true
-  if (accidentToastTimer) clearTimeout(accidentToastTimer)
-  accidentToastTimer = setTimeout(() => {
-    showAccidentToast.value = false
-    accidentToastTimer = null
-  }, 2600)
-}
+watch(() => data.value.continuousDays, () => nextTick(initChart), { immediate: false })
 
 onMounted(() => {
-  loadData()
+  updateScale()
+  nextTick(() => { initChart(); modalRef.value?.focus() })
+  window.addEventListener('resize', handleResize)
+  window.addEventListener('keydown', handleKeydown)
+  loadData().then(() => nextTick(initChart))
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  window.removeEventListener('keydown', handleKeydown)
+  chart?.dispose()
+  chart = null
 })
 </script>
 
 <template>
-  <div class="s01-modal-overlay" @click="emit('close')">
-    <section class="s01-modal" role="dialog" aria-modal="true" aria-labelledby="s01-modal-title" @click.stop>
+  <div class="s01-overlay" :class="{ acceptance: isAcceptanceMode }" @click="handleOverlayClick">
+    <div
+      ref="modalRef"
+      class="s01-modal"
+      :class="{ acceptance: isAcceptanceMode }"
+      :style="{ '--s01-scale': scale }"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="s01-modal-title"
+      tabindex="-1"
+    >
       <header class="s01-header">
-        <h2 id="s01-modal-title" class="s01-title">
-          <span class="s01-key">S01</span>
-          <span>连续安全生产天数</span>
+        <h2 id="s01-modal-title">
+          <span class="title-key">S01</span>
+          <span class="title-name">连续安全生产天数</span>
         </h2>
-        <div class="s01-header-actions">
-          <span class="counting-status" :class="statusClass">
-            <i />
-            {{ statusLabel }}
-          </span>
-          <button class="close-icon" aria-label="关闭" @click="emit('close')">
-            <X :size="21" />
-          </button>
-        </div>
+        <button type="button" aria-label="关闭" @click="emit('close')">
+          <X :size="22" />
+        </button>
       </header>
 
-      <main class="s01-body">
-        <section class="core-panel">
-          <div class="core-item hero">
-            <div class="core-label">当前连续安全生产周期</div>
-            <div class="hero-value">
-              <span class="hero-number">{{ continuousDays }}</span>
-              <span class="hero-unit">天</span>
-            </div>
+      <section class="s01-summary" aria-label="S01摘要">
+        <div v-for="item in summaryCards" :key="item.label" class="summary-card">
+          <span class="summary-label">{{ item.label }}</span>
+          <div class="summary-value-row">
+            <strong :style="{ color: item.color }">{{ item.value }}</strong>
+            <small v-if="item.unit">{{ item.unit }}</small>
           </div>
-          <div class="core-divider" />
-          <div class="core-item">
-            <div class="core-label">开工日期</div>
-            <div class="core-value">{{ safetyProductionData.projectStartDate }}</div>
-          </div>
-          <div class="core-divider" />
-          <div class="core-item">
-            <div class="core-label">当前日期</div>
-            <div class="core-value">{{ safetyProductionData.currentDate }}</div>
-          </div>
-          <div class="core-divider" />
-          <div class="core-item stage">
-            <div class="core-label">当前工期阶段</div>
-            <div class="core-value">{{ safetyProductionData.currentStage }}</div>
-          </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="timeline-panel">
-          <h3>连续安全生产时间流程</h3>
-          <div class="safe-timeline">
-            <div class="timeline-main-row">
-              <div class="timeline-endpoint start">
-                <span>开工日期</span>
-                <strong>{{ safetyProductionData.projectStartDate }}</strong>
-              </div>
-              <div class="safe-line-wrap">
-                <div class="safe-line" :class="{ interrupted: safetyProductionData.countingStatus === 'interrupted' }">
-                  <div class="line-node left" />
-                  <div v-if="safetyProductionData.countingStatus === 'interrupted'" class="interrupt-node">
-                    <span>{{ safetyProductionData.latestInterruptDate }}</span>
-                  </div>
-                  <div class="line-message">本轮连续周期内无事故中断</div>
-                  <div class="line-node right" />
-                </div>
-              </div>
-              <div class="timeline-endpoint current">
-                <span>当前</span>
-                <strong>{{ safetyProductionData.currentDate }}</strong>
-                <em>{{ continuousDays }}天</em>
-              </div>
-            </div>
-            <div class="month-axis">
-              <span v-for="month in monthTicks" :key="month">{{ month }}</span>
-            </div>
-          </div>
-        </section>
+      <main class="s01-content">
+        <div class="s01-main">
+          <section class="panel chart-panel">
+            <h3>连续安全生产天数累计趋势</h3>
+            <div ref="chartRef" class="s01-chart" />
+          </section>
 
-        <section class="stage-panel">
-          <h3>工期流程</h3>
-          <div class="stage-flow">
-            <div
-              v-for="(stage, index) in constructionStages"
-              :key="stage.id"
-              class="stage-node"
-              :class="stage.status"
-            >
-              <div v-if="index < constructionStages.length - 1" class="stage-connector" :class="stage.status" />
-              <div class="stage-circle">
-                <Check v-if="stage.status === 'completed'" :size="22" />
-              </div>
-              <div class="stage-name">{{ stage.name }}</div>
-              <div class="stage-status">
-                {{ stage.status === 'completed' ? '已完成' : stage.status === 'current' ? '进行中' : '未开始' }}
-              </div>
-              <div v-if="stage.detail" class="stage-detail">{{ stage.detail }}</div>
+          <section class="panel record-panel">
+            <div class="panel-heading">
+              <h3>安全生产关键记录</h3>
+              <span>连续计数依据</span>
             </div>
-          </div>
-        </section>
+            <div class="record-empty">
+              <AlertCircle :size="26" />
+              <p>暂无连续计数中断记录</p>
+              <small>项目开工以来，暂无导致连续安全生产计数中断的事故记录。</small>
+            </div>
+          </section>
+        </div>
 
-        <section class="conclusion-card">
-          <div class="conclusion-icon">
-            <ShieldCheck :size="20" />
-          </div>
-          <div class="conclusion-content">
+        <aside class="s01-side">
+          <section class="panel rule-panel">
+            <h3>连续安全生产计数规则</h3>
+            <dl>
+              <div v-for="rule in countingRules" :key="rule.label" :class="{ multiline: (rule as any).multiline }">
+                <dt>{{ rule.label }}</dt>
+                <dd>{{ rule.value }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel conclusion-panel">
             <h3>本轮结论</h3>
-            <p>{{ conclusionText }}</p>
-          </div>
-        </section>
+            <div class="conclusion-body">
+              <div class="conclusion-icon">
+                <ShieldCheck :size="20" />
+              </div>
+              <p>{{ data.conclusion || '暂无数据' }}</p>
+            </div>
+          </section>
+
+          <section class="panel quality-panel">
+            <h3>数据质量状态</h3>
+            <dl>
+              <div><dt>指标编码</dt><dd>S01</dd></div>
+              <div><dt>统计口径</dt><dd>开工日期至今</dd></div>
+              <div><dt>数据状态</dt><dd class="ok">已接入</dd></div>
+              <div><dt>证据资料</dt><dd>暂未关联</dd></div>
+            </dl>
+          </section>
+        </aside>
       </main>
 
       <footer class="s01-footer">
-        <div class="data-time">数据截至：{{ safetyProductionData.updateTime }}</div>
-        <div class="footer-actions">
-          <button class="secondary-btn" @click="handleViewAccidentRecords">查看事故记录</button>
-          <button class="primary-btn" @click="emit('close')">关闭</button>
+        <div class="footer-info" title="正式接口：/api/dashboard/kpi/S01">
+          <FileCheck :size="14" />
+          <span>数据来源：项目正式数据库</span>
         </div>
+        <div class="footer-info">
+          <Clock :size="14" />
+          <span>更新时间：{{ data.updateTime }}</span>
+        </div>
+        <div class="footer-info ok">
+          <Check :size="14" />
+          <span>核验状态：已对齐首页S01卡片</span>
+        </div>
+        <button type="button" @click="emit('close')">关闭</button>
       </footer>
-
-      <Transition name="s01-toast">
-        <div v-if="showAccidentToast" class="accident-toast">
-          事故记录列表接口已预留；当前暂无导致连续安全生产记录中断的事故。
-        </div>
-      </Transition>
-    </section>
+    </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-@use '@/styles/tokens.scss' as *;
-
-.s01-modal-overlay {
+.s01-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(1, 8, 20, 0.68);
+  overflow: hidden;
+  background: rgba(2, 11, 24, 0.76);
   backdrop-filter: blur(4px);
+  animation: s01Fade 0.2s ease;
+
+  &.acceptance { animation: none; }
 }
 
 .s01-modal {
-  position: relative;
-  width: 68vw;
-  max-width: 1280px;
-  height: 80vh;
-  max-height: 80vh;
+  width: 1436px;
+  height: 880px;
+  flex: 0 0 1436px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border: 1px solid rgba(47, 156, 255, 0.35);
+  border-radius: 8px;
+  outline: none;
+  background: linear-gradient(180deg, #07182b, #04101f);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.64);
   color: #e8f3ff;
-  background: linear-gradient(180deg, rgba(7, 22, 44, 0.96) 0%, rgba(5, 18, 38, 0.96) 100%);
-  border: 1px solid rgba(47, 156, 255, 0.4);
-  border-radius: 6px;
-  box-shadow:
-    0 0 0 1px rgba(47, 156, 255, 0.35),
-    0 20px 60px rgba(0, 0, 0, 0.6);
+  transform: scale(var(--s01-scale));
+  transform-origin: center;
+  animation: s01Rise 0.25s ease;
+
+  &.acceptance,
+  &.acceptance * {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  &:focus,
+  &:focus-visible { outline: none; }
 }
 
 .s01-header {
+  height: 60px;
+  flex: 0 0 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(47, 156, 255, 0.16);
+
+  h2 {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    font-size: 22px;
+    font-weight: 600;
+    color: #e8f3ff;
+
+    .title-key {
+      color: #2f9cff;
+      font-family: "DIN Alternate", "Roboto Condensed", sans-serif;
+      font-size: 26px;
+      font-weight: 700;
+      text-shadow: 0 0 8px rgba(47, 156, 255, 0.4);
+    }
+  }
+
+  button {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #8fa9c8;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(47, 156, 255, 0.08);
+      color: #e8f3ff;
+      outline: 1px solid rgba(47, 156, 255, 0.28);
+    }
+  }
+}
+
+.s01-summary {
+  flex: 0 0 88px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 12px 16px 0;
+
+  .summary-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 8px 14px;
+    border: 1px solid rgba(47, 156, 255, 0.15);
+    border-radius: 5px;
+    background: rgba(47, 156, 255, 0.035);
+
+    .summary-label {
+      color: #b8cce3;
+      font-size: 14px;
+      line-height: 20px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .summary-value-row {
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      white-space: nowrap;
+
+      strong {
+        min-width: 0;
+        font-family: "DIN Alternate", "Roboto Condensed", sans-serif;
+        font-size: 28px;
+        line-height: 34px;
+        font-weight: 700;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      small {
+        color: #8fa9c8;
+        font-size: 13px;
+      }
+    }
+  }
+}
+
+.s01-content {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 12px 16px;
+}
+
+.s01-main,
+.s01-side {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel {
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  border: 1px solid rgba(47, 156, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(4, 22, 40, 0.72);
+
+  h3 {
+    margin: 0;
+    color: #e8f3ff;
+    font-size: 15px;
+    line-height: 22px;
+    font-weight: 600;
+  }
+}
+
+.chart-panel {
+  flex: 0 0 376px;
+  padding: 10px 12px;
+}
+
+.s01-chart {
+  width: 100%;
+  height: 332px;
+}
+
+.record-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.record-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #8fa9c8;
+
+  p {
+    margin: 0;
+    color: #b8cce3;
+    font-size: 14px;
+  }
+
+  small {
+    color: #6d86a3;
+    font-size: 12px;
+  }
+}
+
+.panel-heading {
+  height: 38px;
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(143, 169, 200, 0.1);
+
+  span {
+    color: #8fa9c8;
+    font-size: 12px;
+  }
+}
+
+.source-table-wrap {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 169, 200, 0.48) rgba(143, 169, 200, 0.08);
+
+  &::-webkit-scrollbar { width: 6px; }
+  &::-webkit-scrollbar-track { background: rgba(143, 169, 200, 0.06); }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(143, 169, 200, 0.4);
+    border-radius: 3px;
+
+    &:hover { background: rgba(143, 169, 200, 0.6); }
+  }
+}
+
+.source-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 14px;
+
+  th {
+    height: 36px;
+    padding: 0 8px;
+    border-bottom: 1px solid rgba(143, 169, 200, 0.15);
+    background: #071b31;
+    color: #b8cce3;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  td {
+    height: 38px;
+    padding: 0 8px;
+    border-bottom: 1px solid rgba(143, 169, 200, 0.08);
+    color: #d9e7f5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  tbody tr:hover {
+    background: rgba(47, 156, 255, 0.035);
+  }
+
+  .numeric {
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+}
+
+.status-tag {
+  display: inline-flex;
+  min-width: 64px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.03);
+
+  &.completed { background: rgba(105, 227, 111, 0.08); }
+  &.current { background: rgba(47, 156, 255, 0.08); }
+  &.pending { background: rgba(143, 169, 200, 0.08); }
+}
+
+.s01-side .panel { padding: 10px 12px; }
+
+.rule-panel { flex: 1.2; }
+
+.rule-panel dl {
+  margin: 8px 0 0;
+  padding: 0;
+
+  div {
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid rgba(143, 169, 200, 0.07);
+    font-size: 13px;
+
+    &:last-child { border-bottom: 0; }
+
+    &.multiline {
+      min-height: 42px;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 4px;
+
+      dt { color: #8fa9c8; }
+
+      dd {
+        margin: 0;
+        color: #d9e7f5;
+        text-align: left;
+        line-height: 1.4;
+        white-space: normal;
+        word-break: break-all;
+      }
+    }
+  }
+
+  dt { color: #8fa9c8; flex: 0 0 auto; }
+  dd {
+    margin: 0;
+    color: #d9e7f5;
+    text-align: right;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.conclusion-panel { flex: 1; }
+
+.conclusion-body {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+
+  .conclusion-icon {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 4px;
+    background: rgba(105, 227, 111, 0.12);
+    color: #69e36f;
+    border: 1px solid rgba(105, 227, 111, 0.25);
+  }
+
+  p {
+    margin: 0;
+    color: #f4f8ff;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+.quality-panel { flex: 1; }
+
+.quality-panel dl {
+  margin: 8px 0 0;
+
+  div {
+    min-height: 27px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid rgba(143, 169, 200, 0.07);
+    font-size: 13px;
+
+    &:last-child { border-bottom: 0; }
+  }
+
+  dt { color: #8fa9c8; }
+  dd { margin: 0; color: #d9e7f5; text-align: right; }
+  dd.ok { color: #69e36f; font-weight: 600; }
+}
+
+.s01-footer {
   height: 52px;
   flex: 0 0 52px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 18px;
-  border-bottom: 1px solid rgba(143, 169, 200, 0.12);
-  flex-shrink: 0;
-}
-
-.s01-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.s01-key {
-  font-family: var(--font-num);
-  color: #2f9cff;
-  font-size: 26px;
-  font-weight: 700;
-  text-shadow: 0 0 8px rgba(47, 156, 255, 0.4);
-}
-
-.s01-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.counting-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 700;
-  border: 1px solid rgba(105, 227, 111, 0.6);
-  color: #69e36f;
-  background: rgba(105, 227, 111, 0.08);
-}
-
-.counting-status i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #69e36f;
-  box-shadow: 0 0 8px rgba(105, 227, 111, 0.7);
-}
-
-.counting-status.interrupted {
-  color: #ff4f5e;
-  border-color: rgba(255, 79, 94, 0.6);
-  background: rgba(255, 79, 94, 0.08);
-}
-
-.counting-status.interrupted i {
-  background: #ff4f5e;
-  box-shadow: 0 0 8px rgba(255, 79, 94, 0.7);
-}
-
-.counting-status.pending {
-  color: #ffb347;
-  border-color: rgba(255, 179, 71, 0.6);
-  background: rgba(255, 179, 71, 0.08);
-}
-
-.counting-status.pending i {
-  background: #ffb347;
-  box-shadow: 0 0 8px rgba(255, 179, 71, 0.7);
-}
-
-.close-icon {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(143, 169, 200, 0.28);
-  border-radius: 4px;
-  color: #d7e8ff;
-  background: rgba(255, 255, 255, 0.03);
-  cursor: pointer;
-}
-
-.s01-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 18px;
-  overflow: hidden;
-}
-
-.core-panel,
-.timeline-panel,
-.stage-panel,
-.conclusion-card {
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid rgba(143, 169, 200, 0.12);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.015);
-}
-
-.core-panel {
-  flex: 0 0 96px;
-  display: grid;
-  grid-template-columns: 1.2fr 1px 0.8fr 1px 0.8fr 1px 0.9fr;
-  align-items: center;
-  padding: 0 20px;
-}
-
-.core-item {
-  min-width: 0;
-}
-
-.core-item.hero {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.core-divider {
-  width: 1px;
-  height: 44px;
-  background: linear-gradient(180deg, transparent, rgba(143, 169, 200, 0.25), transparent);
-}
-
-.core-label {
-  margin-bottom: 4px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.core-value {
-  font-family: var(--font-num);
-  color: #2f9cff;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  text-shadow: 0 0 6px rgba(47, 156, 255, 0.35);
-}
-
-.core-item.stage .core-value {
-  font-size: 22px;
-}
-
-.hero-value {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.hero-number {
-  font-family: var(--font-num);
-  color: #2f9cff;
-  font-size: 44px;
-  line-height: 0.95;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-shadow: 0 0 10px rgba(47, 156, 255, 0.5), 0 0 20px rgba(47, 156, 255, 0.3);
-}
-
-.hero-unit {
-  color: #d7e8ff;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.timeline-panel {
-  flex: 0 0 132px;
-  padding: 8px 14px;
-}
-
-.stage-panel {
-  flex: 0 0 120px;
-  padding: 8px 14px;
-}
-
-.timeline-panel h3,
-.stage-panel h3 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-main);
-}
-
-.safe-timeline {
-  position: relative;
-}
-
-.timeline-main-row {
-  display: grid;
-  grid-template-columns: 90px 1fr 100px;
-  align-items: center;
-  gap: 10px;
-}
-
-.timeline-endpoint {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.timeline-endpoint span {
-  color: #e8f3ff;
-}
-
-.timeline-endpoint strong {
-  color: #69e36f;
-  font-size: 13px;
-}
-
-.timeline-endpoint.current strong,
-.timeline-endpoint.current em {
-  color: #2f9cff;
-}
-
-.timeline-endpoint.current em {
-  font-style: normal;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.safe-line-wrap {
-  position: relative;
-  height: 30px;
-}
-
-.safe-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 15px;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #69e36f, #79f083);
-  box-shadow: 0 0 10px rgba(105, 227, 111, 0.55);
-}
-
-.safe-line.interrupted {
-  background: linear-gradient(90deg, #69e36f 0%, #69e36f 55%, #ff4f5e 56%, #ff4f5e 58%, #69e36f 59%, #69e36f 100%);
-}
-
-.line-node {
-  position: absolute;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #69e36f;
-  transform: translateY(-50%);
-  box-shadow: 0 0 10px rgba(105, 227, 111, 0.65);
-}
-
-.line-node.left {
-  left: -1px;
-}
-
-.line-node.right {
-  right: -1px;
-}
-
-.line-message {
-  position: absolute;
-  left: 50%;
-  top: -16px;
-  transform: translateX(-50%);
-  color: #69e36f;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.interrupt-node {
-  position: absolute;
-  left: 56%;
-  top: 50%;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #ff4f5e;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 10px rgba(255, 79, 94, 0.6);
-}
-
-.interrupt-node span {
-  position: absolute;
-  left: 50%;
-  top: 20px;
-  transform: translateX(-50%);
-  color: #ff4f5e;
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.month-axis {
-  display: grid;
-  grid-template-columns: repeat(13, minmax(0, 1fr));
-  margin: 6px 90px 0 100px;
-  border-top: 1px dashed rgba(143, 169, 200, 0.18);
-}
-
-.month-axis span {
-  position: relative;
-  padding-top: 4px;
-  color: #778aa5;
-  font-size: 9px;
-  text-align: center;
-}
-
-.month-axis span::before {
-  content: '';
-  position: absolute;
-  top: -7px;
-  left: 50%;
-  width: 1px;
-  height: 7px;
-  background: rgba(143, 169, 200, 0.22);
-}
-
-.stage-flow {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: start;
-  padding: 8px 36px 0;
-}
-
-.stage-node {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-height: 68px;
-}
-
-.stage-connector {
-  position: absolute;
-  top: 14px;
-  left: calc(50% + 18px);
-  width: calc(100% - 36px);
-  height: 4px;
-  background: rgba(143, 169, 200, 0.2);
-}
-
-.stage-connector.completed {
-  background: linear-gradient(90deg, #69e36f, #2f9cff);
-  box-shadow: 0 0 8px rgba(47, 156, 255, 0.22);
-}
-
-.stage-connector.current {
-  background: rgba(143, 169, 200, 0.2);
-}
-
-.stage-circle {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 3px solid rgba(143, 169, 200, 0.4);
-  background: rgba(255, 255, 255, 0.03);
-  color: #e8f3ff;
-}
-
-.stage-node.completed .stage-circle {
-  color: #fff;
-  border-color: #69e36f;
-  background: rgba(105, 227, 111, 0.15);
-  box-shadow: 0 0 12px rgba(105, 227, 111, 0.5);
-}
-
-.stage-node.current .stage-circle {
-  border-color: #2f9cff;
-  background: rgba(47, 156, 255, 0.15);
-  box-shadow: 0 0 10px rgba(47, 156, 255, 0.5), inset 0 0 0 4px rgba(47, 156, 255, 0.15);
-}
-
-.stage-name {
-  margin-top: 6px;
-  color: #f4f8ff;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.stage-status {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.stage-node.completed .stage-status {
-  color: #69e36f;
-}
-
-.stage-node.current .stage-status,
-.stage-detail {
-  color: #2f9cff;
-}
-
-.stage-detail {
-  margin-top: 2px;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.conclusion-card {
-  flex: 0 0 56px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 14px;
-  background: rgba(105, 227, 111, 0.06);
-}
-
-.conclusion-icon {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  background: rgba(105, 227, 111, 0.12);
-  color: #69e36f;
-  border: 1px solid rgba(105, 227, 111, 0.25);
-}
-
-.conclusion-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.conclusion-card h3 {
-  margin: 0 0 2px;
-  color: #69e36f;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.conclusion-card p {
-  margin: 0;
-  color: #f4f8ff;
-  font-size: 12px;
-  line-height: 1.3;
-  font-weight: 600;
-}
-
-.s01-footer {
-  height: 44px;
-  flex: 0 0 44px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px;
-  border-top: 1px solid rgba(143, 169, 200, 0.12);
-  flex-shrink: 0;
-}
-
-.data-time {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.footer-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.secondary-btn,
-.primary-btn {
-  min-width: 100px;
-  height: 32px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.secondary-btn {
-  color: #e8f3ff;
-  border: 1px solid rgba(47, 156, 255, 0.6);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.primary-btn {
-  color: #fff;
-  border: 1px solid #2f9cff;
-  background: linear-gradient(135deg, #0b67d8, #1794ff);
-  box-shadow: 0 0 10px rgba(47, 156, 255, 0.25);
-}
-
-.accident-toast {
-  position: absolute;
-  left: 50%;
-  bottom: 50px;
-  transform: translateX(-50%);
-  padding: 8px 14px;
-  border: 1px solid rgba(47, 156, 255, 0.5);
-  border-radius: 4px;
-  color: #d7e8ff;
-  background: rgba(5, 18, 38, 0.96);
-  font-size: 12px;
-  box-shadow: 0 0 10px rgba(47, 156, 255, 0.15);
-}
-
-.s01-toast-enter-active,
-.s01-toast-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.s01-toast-enter-from,
-.s01-toast-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 8px);
+  gap: 18px;
+  box-sizing: border-box;
+  padding: 0 16px;
+  border-top: 1px solid rgba(47, 156, 255, 0.12);
+
+  .footer-info {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #8fa9c8;
+    font-size: 12px;
+    white-space: nowrap;
+
+    &:first-child {
+      max-width: 360px;
+      overflow: hidden;
+
+      span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    &.ok { color: #69e36f; }
+  }
+
+  button {
+    width: 120px;
+    height: 34px;
+    margin-left: auto;
+    border: 1px solid rgba(47, 156, 255, 0.35);
+    border-radius: 4px;
+    background: rgba(47, 156, 255, 0.08);
+    color: #e8f3ff;
+    font-size: 14px;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(47, 156, 255, 0.15);
+      outline: none;
+    }
+  }
+}
+
+@keyframes s01Fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes s01Rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(var(--s01-scale));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(var(--s01-scale));
+  }
 }
 </style>

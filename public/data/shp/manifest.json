@@ -18,11 +18,11 @@
         "url": "/data/shp/1标段.geojson"
       },
       "style": {
-        "color": "#1677ff",
-        "width": 7,
+        "color": "#4DA3FF",
+        "width": 3,
         "opacity": 1,
         "showLabel": true,
-        "labelSize": 14,
+        "labelSize": 15,
         "labelField": "__layerName",
         "labelColor": "#ffffff"
       }
@@ -42,11 +42,11 @@
         "url": "/data/shp/2标段.geojson"
       },
       "style": {
-        "color": "#13a8a8",
-        "width": 7,
+        "color": "#2EC8A6",
+        "width": 3,
         "opacity": 1,
         "showLabel": true,
-        "labelSize": 14,
+        "labelSize": 15,
         "labelField": "__layerName",
         "labelColor": "#ffffff"
       }
@@ -66,11 +66,11 @@
         "url": "/data/shp/3标段.geojson"
       },
       "style": {
-        "color": "#fa8c16",
-        "width": 7,
+        "color": "#F0B429",
+        "width": 3,
         "opacity": 1,
         "showLabel": true,
-        "labelSize": 14,
+        "labelSize": 15,
         "labelField": "__layerName",
         "labelColor": "#ffffff"
       }
@@ -92,9 +92,9 @@
       "style": {
         "color": "#c77d2d",
         "width": 3,
-        "opacity": 0.22,
+        "opacity": 0.26,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -116,9 +116,9 @@
       "style": {
         "color": "#c77d2d",
         "width": 3,
-        "opacity": 0.22,
+        "opacity": 0.26,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -139,10 +139,10 @@
       },
       "style": {
         "color": "#28a9e0",
-        "width": 3,
-        "opacity": 0.16,
+        "width": 2,
+        "opacity": 0.22,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -163,10 +163,10 @@
       },
       "style": {
         "color": "#28a9e0",
-        "width": 3,
-        "opacity": 0.16,
+        "width": 2,
+        "opacity": 0.22,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -187,10 +187,10 @@
       },
       "style": {
         "color": "#35a853",
-        "width": 3,
-        "opacity": 0.14,
+        "width": 2,
+        "opacity": 0.18,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -211,10 +211,10 @@
       },
       "style": {
         "color": "#f05a47",
-        "width": 15,
+        "width": 12,
         "opacity": 1,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }
@@ -235,10 +235,10 @@
       },
       "style": {
         "color": "#f05a47",
-        "width": 15,
+        "width": 12,
         "opacity": 1,
         "showLabel": true,
-        "labelSize": 12,
+        "labelSize": 14,
         "labelField": "NAME",
         "labelColor": "#ffffff"
       }

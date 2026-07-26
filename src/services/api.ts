@@ -1,4 +1,9 @@
-import type { KpiDetailConfig } from '@/types/dashboard'
+import type { KpiDetailConfig, KpiGroup } from '@/types/dashboard'
+import type { MonthlyReadiness, MonthlyReportOverview } from '@/types/monthly-report'
+import type { E01EventDetail, E01EventsPayload, E01PointTrendPayload } from '@/types/e01'
+import type { E02IssueDetail, E02IssuesPayload } from '@/types/e02'
+import type { E03IssueDetail, E03IssuesPayload } from '@/types/e03'
+import type { S02RiskDetail, S02RisksPayload } from '@/types/s02'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
 
@@ -28,12 +33,77 @@ export async function getDashboardKpiDetail(key: string): Promise<KpiDetailConfi
   return apiGet(`/api/dashboard/kpi/${key}`)
 }
 
+export async function getE01Events(): Promise<{ code: number; data: E01EventsPayload; meta?: Record<string, unknown> } | null> {
+  return apiGet('/api/environment/e01/events')
+}
+
+export async function getE01EventDetail(eventId: number): Promise<{ code: number; data: E01EventDetail; meta?: Record<string, unknown> } | null> {
+  return apiGet(`/api/environment/e01/events/${eventId}`)
+}
+
+export async function getE01PointTrend(
+  pointId: number,
+  factorCode?: string | null,
+): Promise<{ code: number; data: E01PointTrendPayload; meta?: Record<string, unknown> } | null> {
+  const params = new URLSearchParams()
+  if (factorCode) params.set('factorCode', factorCode)
+  const query = params.toString()
+  return apiGet(`/api/environment/e01/points/${pointId}/trend${query ? `?${query}` : ''}`)
+}
+
+export async function getE02Issues(scope?: 'formal' | 'demo'): Promise<{ code: number; data: E02IssuesPayload; meta?: Record<string, unknown> } | null> {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  const query = params.toString()
+  return apiGet(`/api/environment/e02/issues${query ? `?${query}` : ''}`)
+}
+
+export async function getE02IssueDetail(issueId: number): Promise<{ code: number; data: E02IssueDetail; meta?: Record<string, unknown> } | null> {
+  return apiGet(`/api/environment/e02/issues/${issueId}`)
+}
+
+export async function getE03Issues(scope?: 'formal' | 'demo'): Promise<{ code: number; data: E03IssuesPayload; meta?: Record<string, unknown> } | null> {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  const query = params.toString()
+  return apiGet(`/api/environment/e03/issues${query ? `?${query}` : ''}`)
+}
+
+export async function getE03IssueDetail(
+  issueId: number,
+  scope?: 'formal' | 'demo',
+): Promise<{ code: number; data: E03IssueDetail; meta?: Record<string, unknown> } | null> {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  const query = params.toString()
+  return apiGet(`/api/environment/e03/issues/${issueId}${query ? `?${query}` : ''}`)
+}
+
+export async function getS02Risks(): Promise<{ code: number; data: S02RisksPayload; meta?: Record<string, unknown> } | null> {
+  return apiGet('/api/social/s02/risks')
+}
+
+export async function getS02RiskDetail(riskId: number): Promise<{ code: number; data: S02RiskDetail; meta?: Record<string, unknown> } | null> {
+  return apiGet(`/api/social/s02/risks/${riskId}`)
+}
+
 export async function getDashboardTopic(topic: 'carbon' | 'monthly-report'): Promise<KpiDetailConfig | null> {
-  return apiGet(`/api/dashboard/topics/${topic}`)
+  return apiGet(topic === 'carbon' ? '/api/carbon/benefit-overview' : `/api/dashboard/topics/${topic}`)
 }
 
 export async function getDashboardPanels(): Promise<DashboardPanels | null> {
   return apiGet('/api/dashboard/panels')
+}
+
+export async function getMonthlyReportReadiness(reportPeriod: string): Promise<MonthlyReadiness | null> {
+  const params = new URLSearchParams({ reportPeriod })
+  return apiGet<MonthlyReadiness>(`/api/monthly-report/readiness?${params.toString()}`)
+}
+
+// Codex 已完成的新版月报概览接口：MySQL → 服务端 JSON 契约快照 → 前端 Mock
+export async function getMonthlyReportOverview(reportMonth: string): Promise<MonthlyReportOverview | null> {
+  const params = new URLSearchParams({ reportMonth })
+  return apiGet<MonthlyReportOverview>(`/api/monthly/report-overview?${params.toString()}`)
 }
 
 export async function getWorkspaceSummary(): Promise<WorkspaceSummary | null> {
@@ -223,29 +293,31 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T | null> {
   }
 }
 
-type KpiGroup = {
-  key: 'E' | 'S' | 'G'
-  title: string
-  theme: string
-  status: string
-  items: {
-    key: string
-    label: string
-    fullName: string
-    value: number
-    unit: string
-  }[]
-}
-
 type S01Data = {
-  projectStartDate: string
-  currentDate: string
-  continuousDays: number
-  currentStage: string
-  currentStageDetail: string
+  continuousDays: number | null
+  statisticsStart: string | null
+  cycleStartDate: string | null
+  statisticsAsOf: string | null
   countingStatus: string
-  updateTime: string
-  timeline: {
+  latestInterruptDate: string | null
+  latestInterruptReason: string | null
+  pendingDeterminationCount: number
+  confirmationStatus: string | null
+  confirmationBatchId: number | null
+  demoBatchCode: string | null
+  currentConstructionStage: string | null
+  currentStage: string | null
+  currentStageDetail: string | null
+  dataNature: string
+  isDemo: boolean
+  scope: string
+  conclusion: string
+  // 兼容过渡字段
+  projectStartDate?: string | null
+  currentDate?: string | null
+  updateTime?: string | null
+  // 旧字段（兼容 KpiDetailModal 等）
+  timeline?: {
     startLabel: string
     startDate: string
     message: string
@@ -253,13 +325,14 @@ type S01Data = {
     endDate: string
     months: string[]
   }
-  constructionStages: {
+  constructionStages?: {
     id: string
     name: string
     status: string
     detail?: string
+    startDate?: string
+    endDate?: string
   }[]
-  conclusion: string
 }
 
 type DashboardPanels = {
@@ -377,6 +450,10 @@ export type ParseJobResponse = {
   jobId: number
   jobCode: string
   jobStatus: string
+  parseSource?: string
+  parseEngine?: string
+  confidence?: number
+  summary?: string
 }
 
 export type ParseJobDetail = {
@@ -388,6 +465,10 @@ export type ParseJobDetail = {
   confidence: number
   startedAt: string
   finishedAt: string
+  parseEngine?: string
+  modelName?: string
+  parseSource?: string
+  summary?: string
 }
 
 export type ParseFieldItem = {

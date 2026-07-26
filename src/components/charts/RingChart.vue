@@ -21,20 +21,14 @@ function updateOption() {
   const palette = ['#2f9cff', '#69e36f', '#a66cff', '#ffb347']
   chart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c}%' },
-    legend: {
-      orient: 'vertical',
-      right: 0,
-      top: 'center',
-      textStyle: { color: '#8fa9c8', fontSize: 11 },
-      itemWidth: 10,
-      itemHeight: 10,
-    },
+    // Legend is rendered by the parent panel; keep chart as pie-only to avoid overlap.
+    legend: { show: false },
     series: [
       {
         type: 'pie',
-        radius: ['45%', '70%'],
-        center: ['32%', '50%'],
-        avoidLabelOverlap: false,
+        radius: ['48%', '72%'],
+        center: ['50%', '50%'],
+        avoidLabelOverlap: true,
         label: { show: false },
         labelLine: { show: false },
         data: props.data.map((item, index) => ({

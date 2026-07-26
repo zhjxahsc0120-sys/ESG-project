@@ -17,6 +17,33 @@
   height: 100%;
 }
 
+/* 左列 E/S：压缩单项宽度，四指标仍一排展示 */
+.kpi-groups--compact {
+  .kpi-group-panel {
+    min-width: 0;
+    padding: var(--panel-pad-sm) 8px;
+  }
+
+  .kpi-group-title {
+    font-size: 15px;
+    gap: 4px;
+  }
+
+  .kpi-items {
+    gap: 5px;
+  }
+
+  .kpi-card {
+    padding: 6px 3px;
+
+    .kpi-label {
+      font-size: 11px;
+      line-height: 1.25;
+      letter-spacing: -0.2px;
+    }
+  }
+}
+
 .kpi-group-panel {
   flex: 1;
   @include panel-base;

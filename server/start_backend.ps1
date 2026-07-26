@@ -1,14 +1,26 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Python = "C:\Users\TB\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 $ServerDir = Join-Path $Root "server"
+$RequirementsFile = Join-Path $ServerDir "requirements.txt"
 $PidFile = Join-Path $ServerDir "server.pid"
 $LogFile = Join-Path $ServerDir "server.log"
 $ErrFile = Join-Path $ServerDir "server.err.log"
 
-if (-not (Test-Path $Python)) {
-  $Python = "python"
+$PythonCommand = Get-Command python -CommandType Application -ErrorAction Stop
+$Python = $PythonCommand.Source
+
+Write-Host "Python runtime: $Python"
+
+# Keep the backend on the same PATH Python used by the top-level launcher and
+# bootstrap declared dependencies when this Python environment changes.
+& $Python -c "import pymysql" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Installing backend Python dependencies..." -ForegroundColor Yellow
+  & $Python -m pip install -r $RequirementsFile
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to install backend Python dependencies."
+  }
 }
 
 if (Test-Path $PidFile) {

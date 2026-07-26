@@ -29,6 +29,16 @@ def ensure_columns() -> None:
     add_column_if_missing("labor_dispute_record", "amount_wan", "DECIMAL(18,2) NULL COMMENT '涉及金额，万元'")
     add_column_if_missing("labor_dispute_record", "responsible_department", "VARCHAR(100) NULL COMMENT '责任部门'")
     add_column_if_missing("labor_dispute_record", "closed_date", "DATE NULL COMMENT '办结日期'")
+    add_column_if_missing(
+        "labor_dispute_record",
+        "data_nature",
+        "VARCHAR(30) NOT NULL DEFAULT 'formal' COMMENT 'formal | demo'",
+    )
+    add_column_if_missing(
+        "labor_dispute_record",
+        "is_demo",
+        "TINYINT NOT NULL DEFAULT 0 COMMENT '0=formal 1=demo'",
+    )
 
     add_column_if_missing("appeal_record", "appeal_content", "VARCHAR(500) NULL COMMENT '诉求内容'")
     add_column_if_missing("appeal_record", "accepted_date", "DATE NULL COMMENT '受理时间'")
@@ -39,6 +49,7 @@ def ensure_columns() -> None:
 
 
 def seed_rows() -> None:
+    """S03：仅农民工工资类；正式存量 0；demo 包 2 未办结+1 已办结。S04 保留既有构造台账。"""
     with mysql_connect() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM labor_dispute_record WHERE id BETWEEN 510001 AND 510099")
@@ -48,15 +59,14 @@ def seed_rows() -> None:
                 """
                 INSERT INTO labor_dispute_record
                 (id, dispute_type, dispute_name, status, involved_people, amount_wan,
-                 responsible_department, overdue, occurred_date, closed_date, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 responsible_department, overdue, occurred_date, closed_date, created_at,
+                 data_nature, is_demo)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 [
-                    (510001, "工资支付", "班组工资拖欠", "协调中", 8, 32, "财务管理部", 0, "2026-07-05", None, "2026-07-05 09:00:00"),
-                    (510002, "工伤赔偿", "工伤赔偿争议", "待鉴定", 1, 15, "安全环保部", 0, "2026-07-08", None, "2026-07-08 09:00:00"),
-                    (510003, "退场结算", "退场结算纠纷", "结算中", 6, 18, "工程管理部", 0, "2026-06-25", None, "2026-06-25 09:00:00"),
-                    (510004, "工资支付", "加班工资争议", "调查中", 3, 3, "人力资源部", 0, "2026-06-28", None, "2026-06-28 09:00:00"),
-                    (510005, "工资支付", "零星用工工资核算", "已办结", 2, 6, "财务管理部", 0, "2026-06-20", "2026-07-06", "2026-06-20 09:00:00"),
+                    (510001, "工资支付", "班组农民工工资拖欠上访", "协调中", 8, 32, "合同部", 0, "2026-07-05", None, "2026-07-05 09:00:00", "demo", 1),
+                    (510002, "工资支付", "加班工资支付争议上访", "调查中", 3, 3, "合同部", 0, "2026-06-28", None, "2026-06-28 09:00:00", "demo", 1),
+                    (510003, "工资支付", "零星用工工资核算", "已办结", 2, 6, "合同部", 0, "2026-06-20", "2026-07-06", "2026-06-20 09:00:00", "demo", 1),
                 ],
             )
 
@@ -82,10 +92,9 @@ def seed_rows() -> None:
 def main() -> int:
     ensure_columns()
     seed_rows()
-    print("✅ S03/S04 社会责任明细表 V0.5 已扩展并写入演示台账数据。")
+    print("OK S03/S04 social detail seed: wage-only S03 demo (2 open) + S04 appeal ledger.")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -2,26 +2,44 @@
 import { useDashboardStore } from '@/stores/dashboard.store'
 
 const store = useDashboardStore()
+
+const props = withDefaults(defineProps<{
+  activeKey?: string
+}>(), {
+  activeKey: 'dashboard',
+})
+
+const emit = defineEmits<{
+  (event: 'navigate', key: string): void
+}>()
+
+function handleNavClick(key: string) {
+  emit('navigate', key)
+}
 </script>
 
 <template>
   <header class="header-nav">
-    <!-- 顶部光带 -->
     <div class="header-top-glow" />
-
-    <!-- 标题 -->
-    <h1 class="header-title">罗宜高速 ESG 数字化管理平台</h1>
-
-    <!-- 导航：横向铺开 -->
+    <div class="header-title-wrap">
+      <h1 class="header-title">罗宜高速 <span>ESG</span> 综合数据管理平台</h1>
+    </div>
     <nav class="header-nav-bar">
       <ul class="header-nav-list">
         <li
           v-for="item in store.navs"
           :key="item.key"
-          class="header-nav-item"
-          :class="{ active: item.active }"
         >
-          <span class="nav-item-text">{{ item.label }}</span>
+          <button
+            type="button"
+            class="header-nav-item"
+            :class="{ active: props.activeKey === item.key }"
+            :data-nav-key="item.key"
+            :aria-current="props.activeKey === item.key ? 'page' : undefined"
+            @click="handleNavClick(item.key)"
+          >
+            <span class="nav-item-text">{{ item.label }}</span>
+          </button>
         </li>
       </ul>
     </nav>
@@ -32,24 +50,23 @@ const store = useDashboardStore()
 @use '@/styles/tokens.scss' as *;
 
 .header-nav {
-  @include panel-base;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 16px 6px;
+  /* 42 + 4 + 34 = 80，与 --dashboard-header-h 对齐，避免 fr 行随壳高伸缩 */
+  display: grid;
+  grid-template-rows: 42px 34px;
+  row-gap: 4px;
+  align-content: center;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
-// ── 顶部光带 ──
 .header-top-glow {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   height: 1px;
+  pointer-events: none;
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -60,96 +77,120 @@ const store = useDashboardStore()
   );
 }
 
-// ── 标题 ──
+.header-title-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
 .header-title {
   font-size: var(--fs-platform-title);
   font-weight: 700;
-  letter-spacing: 8px;
+  letter-spacing: 0.04em;
   margin: 0;
-  line-height: 1.15;
+  line-height: 1.1;
   color: var(--text-main);
-  text-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
-  background: linear-gradient(180deg, #ffffff 0%, #b0d4f5 60%, #7ab8e0 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  text-shadow: none;
   position: relative;
   z-index: 1;
+  span { color: var(--cyan); }
 }
 
-// ── 导航：横向铺开 ──
+.header-title-wrap p {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-subtitle);
+  line-height: 1;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
 .header-nav-bar {
-  margin-top: 4px;
+  height: 100%;
   width: 100%;
+  /* 与下方 E 组左边界齐平（不再额外缩进） */
+  padding: 0;
 
   .header-nav-list {
     display: flex;
-    gap: 0;
+    justify-content: flex-start;
+    gap: var(--space-6);
     list-style: none;
     margin: 0;
     padding: 0;
-    justify-content: center;
+    height: 100%;
+  }
+
+  .header-nav-list > li {
+    /* 原 160px，按约 1.5 倍拉长 */
+    width: 240px;
+    height: 34px;
+    flex-shrink: 0;
   }
 
   .header-nav-item {
-    flex: 1;
-    max-width: 180px;
-    height: 26px;
+    width: 240px;
+    height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border-faint);
-    border-radius: 3px;
-    background: rgba(5, 18, 38, 0.5);
+    border-radius: var(--radius-sm);
+    background: linear-gradient(180deg, rgba(8, 31, 55, 0.88), rgba(4, 17, 33, 0.88));
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
     position: relative;
-    // 相邻按钮共用边框（去掉中间双线）
-    margin-left: -1px;
-
-    &:first-child {
-      margin-left: 0;
-      border-top-left-radius: 4px;
-      border-bottom-left-radius: 4px;
-    }
-
-    &:last-child {
-      border-top-right-radius: 4px;
-      border-bottom-right-radius: 4px;
-    }
+    padding: 0 8px;
+    box-sizing: border-box;
+    /* 外发光走伪元素，避免 active 阴影在视觉上“撑大” tab */
+    overflow: visible;
 
     .nav-item-text {
-      font-size: 14px;
-      font-weight: 500;
+      font-size: var(--fs-nav);
+      font-weight: 600;
       color: var(--text-muted);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     &:hover {
       border-color: var(--border-blue-dim);
-      background: rgba(0, 174, 255, 0.06);
+      background: rgba(47, 156, 255, 0.1);
       z-index: 1;
-
       .nav-item-text {
         color: var(--text-main);
       }
+    }
+
+    &:focus-visible {
+      z-index: 3;
+      outline: 2px solid var(--cyan);
+      outline-offset: -2px;
     }
 
     &.active {
       border-color: var(--border-blue);
       background: linear-gradient(
         180deg,
-        rgba(0, 174, 255, 0.16) 0%,
-        rgba(0, 174, 255, 0.04) 100%
+        rgba(47, 156, 255, 0.32) 0%,
+        rgba(10, 72, 135, 0.14) 100%
       );
+      box-shadow: inset 0 0 var(--space-16) rgba(47, 156, 255, 0.12);
       z-index: 2;
-
       .nav-item-text {
         color: var(--text-main);
-        font-weight: 600;
       }
-
-      // 底部指示条
+      &::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: var(--shadow-blue);
+        pointer-events: none;
+      }
       &::after {
         content: '';
         position: absolute;
@@ -157,11 +198,19 @@ const store = useDashboardStore()
         bottom: -1px;
         transform: translateX(-50%);
         width: 60%;
-        height: 2px;
+        height: var(--space-2);
         background: var(--cyan);
         box-shadow: 0 0 4px rgba(0, 229, 255, 0.5);
+        pointer-events: none;
       }
     }
   }
+}
+
+@media (max-height: 900px), (max-width: 1680px) {
+  .header-title { font-size: 28px; }
+  .header-title-wrap p { font-size: 13px; }
+  .header-nav-item { padding-inline: 5px; }
+  .header-nav-item .nav-item-text { font-size: 15px; }
 }
 </style>

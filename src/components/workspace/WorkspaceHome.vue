@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Upload, FolderOpen, Send, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { Upload, FolderOpen, ChevronLeft, ChevronRight, ArrowRight } from 'lucide-vue-next'
 import {
   workspaceStatusCards as mockWorkspaceStatusCards,
   allUploadTasks,
   todayFocusList,
-  quickQuestions,
 } from '@/data/workspace.mock'
+import { useRouter } from 'vue-router'
 import { getWorkspaceSummary, getWorkspaceTasks } from '@/services/api'
 import type { UploadTask, StatusCard } from '@/types/workspace'
 import { onWorkspaceRefresh } from '@/utils/workspaceRefresh'
+
+const router = useRouter()
 
 const emit = defineEmits<{
   (e: 'navigate', key: string, status?: string): void
   (e: 'openTask', taskId: string): void
 }>()
-
-const inputValue = ref('')
-const assistantMessage = ref('')
 const currentPage = ref(1)
 const pageSize = 10
 const taskList = ref<UploadTask[]>([...allUploadTasks])
@@ -84,15 +83,8 @@ function handleTaskClick(taskId: string) {
   emit('openTask', taskId)
 }
 
-function handleQuickQuestion(question: string) {
-  inputValue.value = question
-  assistantMessage.value = ''
-}
-
-function handleSend() {
-  if (!inputValue.value.trim()) return
-  assistantMessage.value = `已收到问题「${inputValue.value}」。智能助手能力为原型预留，暂未接入真实 AI 问答服务。`
-  inputValue.value = ''
+function goToAssistant() {
+  router.push('/assistant')
 }
 
 function getModuleColor(module: string) {
@@ -275,36 +267,14 @@ function getFocusTypeClass(type: string) {
     </div>
 
     <aside class="right-sidebar">
-      <div class="assistant-card">
+      <div class="assistant-card" @click="goToAssistant">
         <div class="card-header">
           <div class="card-title">ESG 智能助手</div>
         </div>
         <div class="greeting">Hi，项目管理员</div>
-        <div class="input-wrapper">
-          <input
-            v-model="inputValue"
-            type="text"
-            placeholder="询问待办任务、缺失资料或上传要求"
-            class="assistant-input"
-            @keyup.enter="handleSend"
-          />
-          <button class="send-btn" @click="handleSend">
-            <Send :size="16" />
-          </button>
-        </div>
-        <div v-if="assistantMessage" class="assistant-message">
-          {{ assistantMessage }}
-        </div>
-        <div class="quick-questions">
-          <div class="quick-title">快捷问题</div>
-          <button
-            v-for="q in quickQuestions"
-            :key="q.id"
-            class="quick-question-btn"
-            @click="handleQuickQuestion(q.question)"
-          >
-            {{ q.question }}
-          </button>
+        <div class="assistant-entry">
+          <span>询问待办任务、缺失资料或上传要求</span>
+          <ArrowRight :size="16" />
         </div>
       </div>
 
@@ -617,11 +587,31 @@ function getFocusTypeClass(type: string) {
   cursor: not-allowed;
 }
 
-.assistant-card, .focus-card {
+.assistant-card {
   background: rgba(5, 26, 50, 0.8);
   border: 1px solid rgba(105, 227, 111, 0.1);
   border-radius: 10px;
   padding: 16px;
+}
+
+.focus-card {
+  background: rgba(5, 26, 50, 0.8);
+  border: 1px solid rgba(105, 227, 111, 0.1);
+  border-radius: 10px;
+  padding: 16px 20px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.assistant-card {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.assistant-card:hover {
+  border-color: rgba(47, 156, 255, 0.3);
+  box-shadow: 0 0 16px rgba(47, 156, 255, 0.08);
 }
 
 .card-header {
@@ -648,81 +638,36 @@ function getFocusTypeClass(type: string) {
   margin-bottom: 12px;
 }
 
-.input-wrapper {
+.assistant-entry {
   display: flex;
-  gap: 8px;
-}
-
-.assistant-input {
-  flex: 1;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 6px;
-  color: #e8f3ff;
-  font-size: 12px;
-  outline: none;
-}
-
-.assistant-input::placeholder {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(47, 156, 255, 0.15);
+  border-radius: 8px;
   color: #5a7a9a;
-}
-
-.send-btn {
-  padding: 10px;
-  background: rgba(105, 227, 111, 0.15);
-  border: 1px solid rgba(105, 227, 111, 0.3);
-  border-radius: 6px;
-  color: #69e36f;
-  cursor: pointer;
-}
-
-.send-btn:hover {
-  background: rgba(105, 227, 111, 0.25);
-}
-
-.assistant-message {
-  margin-top: 10px;
-  padding: 9px 10px;
-  background: rgba(47, 156, 255, 0.08);
-  border: 1px solid rgba(47, 156, 255, 0.18);
-  border-radius: 6px;
-  color: #9fc7ff;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.quick-questions {
-  margin-top: 14px;
-}
-
-.quick-title {
-  font-size: 11px;
-  color: #5a7a9a;
-  margin-bottom: 8px;
-}
-
-.quick-question-btn {
-  display: block;
-  width: 100%;
-  padding: 9px 12px;
-  background: rgba(105, 227, 111, 0.05);
-  border: none;
-  border-radius: 5px;
-  color: #8fa9c8;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  margin-bottom: 6px;
+  font-size: 13px;
   transition: all 0.2s;
-  line-height: 1.4;
-  white-space: normal;
-  min-height: 38px;
 }
 
-.quick-question-btn:hover {
-  background: rgba(105, 227, 111, 0.1);
-  color: #e8f3ff;
+.assistant-entry span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-entry svg {
+  color: #2f9cff;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.assistant-card:hover .assistant-entry {
+  border-color: rgba(47, 156, 255, 0.3);
+  color: #8fa9c8;
 }
 
 .focus-list {

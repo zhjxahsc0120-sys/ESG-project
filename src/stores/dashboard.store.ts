@@ -13,6 +13,7 @@ import type {
   MonthlyReport,
   TimelineStep,
 } from '@/types/dashboard'
+import type { MonthlyReadiness } from '@/types/monthly-report'
 import {
   navItems,
   kpiGroups,
@@ -28,7 +29,9 @@ import {
   monthlyReport,
   timelineSteps,
 } from '@/data/dashboard.mock'
-import { getDashboardKpis, getDashboardPanels } from '@/services/api'
+import { createMonthlyReadinessMock } from '@/data/monthly-readiness.mock'
+import { getDashboardKpis, getDashboardPanels, getMonthlyReportReadiness } from '@/services/api'
+import { validateMonthlyReadiness } from '@/utils/monthly-readiness'
 
 export const useDashboardStore = defineStore('dashboard', () => {
   const navs = ref<NavItem[]>(navItems)
@@ -43,6 +46,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const carbonSrc = ref<CarbonSource[]>(carbonSources)
   const reductions = ref<ReductionMeasure[]>(reductionMeasures)
   const monthly = ref<MonthlyReport>(monthlyReport)
+  const monthlyReadiness = ref<MonthlyReadiness>(createMonthlyReadinessMock())
+  const monthlyReadinessError = ref<string | null>(null)
   const timeline = ref<TimelineStep[]>(timelineSteps)
 
   const activeLayers = ref<string[]>(['all', 'environment', 'risk'])
@@ -70,6 +75,29 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (data.gis?.sensitiveAreas) areas.value = data.gis.sensitiveAreas as SensitiveArea[]
   }
 
+  async function loadMonthlyReadiness(reportPeriod = '2026-07') {
+    try {
+      const data = await getMonthlyReportReadiness(reportPeriod)
+      if (!data) {
+        throw new Error(`月报资料归集率接口请求失败：${reportPeriod}`)
+      }
+
+      const validationErrors = validateMonthlyReadiness(data)
+      if (validationErrors.length > 0) {
+        throw new Error(`月报资料归集率数据校验失败：${validationErrors.join('；')}`)
+      }
+
+      monthlyReadiness.value = data
+      monthlyReadinessError.value = null
+    } catch (error) {
+      monthlyReadiness.value = createMonthlyReadinessMock()
+      monthlyReadinessError.value = error instanceof Error ? error.message : String(error)
+      if (import.meta.env.DEV) {
+        console.warn('[monthly-readiness]', monthlyReadinessError.value)
+      }
+    }
+  }
+
   function toggleLayer(layer: string) {
     const idx = activeLayers.value.indexOf(layer)
     if (idx > -1) {
@@ -81,6 +109,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
   loadKpis()
   loadPanels()
+  void loadMonthlyReadiness()
 
   return {
     navs,
@@ -95,10 +124,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
     carbonSrc,
     reductions,
     monthly,
+    monthlyReadiness,
+    monthlyReadinessError,
     timeline,
     activeLayers,
     toggleLayer,
     loadKpis,
     loadPanels,
+    loadMonthlyReadiness,
   }
 })

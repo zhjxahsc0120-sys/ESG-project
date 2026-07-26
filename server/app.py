@@ -10,11 +10,17 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import mysql_api
+import monthly_report_readiness
+import monthly_report_overview
 from mysql_db import mysql_enabled, mysql_ping
 
 BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
 DB_PATH = BASE_DIR / "data" / "luoyi_esg_dev.db"
 DASHBOARD_PAYLOAD_PATH = BASE_DIR / "dashboard_payload.json"
+MONTHLY_OVERVIEW_SNAPSHOT_PATH = BASE_DIR / "data" / "monthly_report_overview.snapshot.json"
+CARBON_OVERVIEW_SNAPSHOT_PATH = BASE_DIR / "data" / "carbon_benefit_overview.snapshot.json"
+GIS_MANIFEST_PATH = ROOT_DIR / "public" / "data" / "shp" / "manifest.json"
 UPLOAD_DIR = BASE_DIR / "storage" / "uploads" / "202607"
 HOST = "127.0.0.1"
 PORT = 8765
@@ -51,6 +57,233 @@ def load_dashboard_payload() -> dict:
     if not DASHBOARD_PAYLOAD_PATH.exists():
         return {}
     return json.loads(DASHBOARD_PAYLOAD_PATH.read_text(encoding="utf-8"))
+
+
+def load_monthly_overview_snapshot(report_period: str | None = None) -> dict | None:
+    """Load the server-side contract snapshot without reviving the legacy popup values."""
+    if not MONTHLY_OVERVIEW_SNAPSHOT_PATH.exists():
+        return None
+    overview = json.loads(MONTHLY_OVERVIEW_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    if report_period and overview.get("reportMonth") != report_period:
+        return None
+    overview["sourceMode"] = "server-json"
+    overview["isMock"] = False
+    return overview
+
+
+def load_carbon_overview_snapshot() -> dict | None:
+    if not CARBON_OVERVIEW_SNAPSHOT_PATH.exists():
+        return None
+    overview = json.loads(CARBON_OVERVIEW_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    overview["sourceMode"] = "server-json"
+    overview["isMock"] = False
+    return overview
+
+
+def monthly_overview_to_topic(overview: dict, base: dict | None = None) -> dict:
+    summary_data = overview["summary"]
+    topic = dict(base or {})
+    topic.update(
+        {
+            "key": "MONTHLY",
+            "fullName": "月报准备与输出",
+            "theme": "blue",
+            "isTopic": True,
+            "summary": [
+                {"label": "资料归集率", "value": overview["readinessRate"], "unit": "%"},
+                {"label": "已归集", "value": f"{summary_data['collectedCount']}/{summary_data['totalCount']}", "unit": "项"},
+                {"label": "待处理", "value": summary_data["pendingTotal"], "unit": "项"},
+                {"label": "输出状态", "value": overview["outputStatus"]["label"], "unit": ""},
+            ],
+            "topicData": {
+                "overview": overview,
+                "progress": {
+                    "groups": [
+                        {"key": item["groupCode"], "label": f"{item['groupCode']}组", "value": item["progress"],
+                         "collectedCount": item["collectedCount"], "totalCount": item["totalCount"]}
+                        for item in overview["groupProgress"]
+                    ]
+                },
+                "chapters": {"list": overview["taskInstances"]},
+                "statusChain": overview["processStages"],
+            },
+            "detailData": overview["pendingTasks"],
+            "dataSource": "服务端JSON月报契约快照",
+            "updateTime": overview.get("updatedAt"),
+            "completeness": f"{overview['readinessRate']}%",
+            "sourceMode": overview["sourceMode"],
+            "dataNature": overview["dataNature"],
+            "isMock": overview["isMock"],
+        }
+    )
+    return topic
+
+
+def load_gis_manifest() -> dict:
+    if not GIS_MANIFEST_PATH.exists():
+        return {"layers": []}
+    return json.loads(GIS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def gis_static_layers(
+    project_id: str = "LUOYI-ESG",
+    section_id: str | None = None,
+    current_time: str | None = None,
+    visible_layer_ids: list[str] | None = None,
+) -> dict:
+    manifest = load_gis_manifest()
+    layers = manifest.get("layers") or []
+    visible_set = set(visible_layer_ids or [])
+    data = []
+    for layer in layers:
+        if not layer.get("enabled", True):
+            continue
+        if visible_set and layer.get("id") not in visible_set:
+            continue
+        if section_id and layer.get("objectType") == "road-section":
+            if section_id not in {layer.get("id"), layer.get("name")}:
+                continue
+        data.append(
+            {
+                "id": layer.get("id"),
+                "name": layer.get("name"),
+                "geometryType": layer.get("geometryType"),
+                "enabled": bool(layer.get("enabled", True)),
+                "objectType": layer.get("objectType"),
+                "featureCount": int(layer.get("featureCount") or 0),
+                "fields": layer.get("fields") or [],
+                "source": {
+                    **(layer.get("source") or {}),
+                    "type": "api",
+                },
+                "style": layer.get("style") or {},
+            }
+        )
+    return {
+        "code": 0,
+        "data": data,
+        "meta": {
+            "projectId": project_id,
+            "sectionId": section_id,
+            "currentTime": current_time,
+            "total": len(data),
+            "dataSource": "fallback",
+            "dataNature": "demo",
+            "fallback": "static-geojson",
+        },
+    }
+
+
+def geojson_path_from_source_url(url: str | None) -> Path | None:
+    if not url:
+        return None
+    normalized = unquote(url)
+    if normalized.startswith("/"):
+        normalized = normalized.lstrip("/")
+    if normalized.startswith("data/"):
+        normalized = f"public/{normalized}"
+    return ROOT_DIR / normalized.replace("/", "\\")
+
+
+def gis_empty_relation_summary() -> dict:
+    return {"total": 0, "pendingCount": 0, "highRiskCount": 0, "byType": []}
+
+
+GIS_STATIC_FEATURE_META = {
+    "section-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "section-2": {"sectionId": "2标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "section-3": {"sectionId": "3标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "waste-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "waste-2": {"sectionId": "2标段", "status": "attention", "statusLabel": "关注", "riskLevel": 2},
+    "water-1": {"sectionId": "2标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "water-2": {"sectionId": "3标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "eco-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "slope-1": {"sectionId": "1标段", "status": "normal", "statusLabel": "正常", "riskLevel": 1},
+    "slope-2": {"sectionId": "2标段", "status": "attention", "statusLabel": "关注", "riskLevel": 2},
+}
+
+
+def gis_static_features(
+    project_id: str = "LUOYI-ESG",
+    layer_id: str | None = None,
+    section_id: str | None = None,
+    current_time: str | None = None,
+) -> dict:
+    manifest = load_gis_manifest()
+    layers = manifest.get("layers") or []
+    features = []
+    for layer in layers:
+        if not layer.get("enabled", True):
+            continue
+        if layer_id and layer.get("id") != layer_id:
+            continue
+        layer_meta = GIS_STATIC_FEATURE_META.get(layer.get("id"), {})
+        layer_section_id = layer_meta.get("sectionId")
+        if section_id and section_id != layer_section_id:
+            continue
+        source = layer.get("source") or {}
+        geojson_path = geojson_path_from_source_url(source.get("url"))
+        if not geojson_path or not geojson_path.exists():
+            continue
+        collection = json.loads(geojson_path.read_text(encoding="utf-8"))
+        for index, item in enumerate(collection.get("features") or [], 1):
+            properties = item.get("properties") or {}
+            name = properties.get("NAME") or properties.get("name") or layer.get("name") or layer.get("id")
+            feature_id = f"{layer.get('id')}-{index}"
+            feature_properties = {
+                **properties,
+                **layer_meta,
+                "sourceMode": "static-geojson",
+                "projectId": project_id,
+            }
+            status = layer_meta.get("status") or "normal"
+            status_label = layer_meta.get("statusLabel") or "正常"
+            risk_level = int(layer_meta.get("riskLevel") or 1)
+            features.append(
+                {
+                    "id": feature_id,
+                    "layerId": layer.get("id"),
+                    "objectType": layer.get("objectType"),
+                    "name": name,
+                    "geometry": item.get("geometry") or {},
+                    "properties": feature_properties,
+                    "status": status,
+                    "statusLabel": status_label,
+                    "riskLevel": risk_level,
+                    "businessSummary": {
+                        "statusCode": status,
+                        "statusLabel": status_label,
+                        "title": name,
+                        "dashboardRows": [
+                            {"label": "图层", "value": layer.get("name")},
+                            {"label": "来源", "value": "本地 GeoJSON"},
+                        ],
+                        "dashboardNote": "MySQL 不可用时展示本地 GIS 基础图层；业务关联事项待数据库恢复后显示。",
+                        "previewRows": [
+                            {"label": key, "value": value}
+                            for key, value in properties.items()
+                        ],
+                        "targetModule": "GIS",
+                        "targetRoute": None,
+                    },
+                    "relationSummary": gis_empty_relation_summary(),
+                    "updatedAt": current_time,
+                }
+            )
+    return {
+        "code": 0,
+        "data": features,
+        "meta": {
+            "projectId": project_id,
+            "sectionId": section_id,
+            "currentTime": current_time,
+            "layerId": layer_id,
+            "total": len(features),
+            "dataSource": "fallback",
+            "dataNature": "demo",
+            "fallback": "static-geojson",
+        },
+    }
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: object, status: int = HTTPStatus.OK) -> None:
@@ -197,12 +430,13 @@ def get_dashboard_kpis() -> dict:
 
     groups: dict[str, dict] = {key: {**meta, "items": []} for key, meta in GROUP_META.items()}
     for row in rows:
+        is_e04 = row["indicator_code"] == "E04"
         item = {
             "key": row["indicator_code"],
-            "label": row["label"],
-            "fullName": row["full_name"],
+            "label": "项目累计碳排放" if is_e04 else row["label"],
+            "fullName": "项目累计碳排放" if is_e04 else row["full_name"],
             "value": int(row["value"]) if float(row["value"]).is_integer() else row["value"],
-            "unit": row["unit"],
+            "unit": "tCO₂e" if is_e04 else row["unit"],
         }
         groups[row["group_code"]]["items"].append(item)
 
@@ -213,6 +447,10 @@ def get_dashboard_kpi_detail(kpi_code: str) -> dict | None:
     mysql_payload = try_mysql(mysql_api.get_dashboard_kpi_detail, kpi_code)
     if mysql_payload:
         return mysql_payload
+
+    # E01 has a complete MySQL chain; never substitute the legacy JSON snapshot.
+    if kpi_code == "E01":
+        return None
 
     payload = load_dashboard_payload()
     detail = (payload.get("kpiDetails") or {}).get(kpi_code)
@@ -229,19 +467,12 @@ def get_dashboard_topic(topic_key: str) -> dict | None:
 
     payload = load_dashboard_payload()
     if topic_key == "carbon":
-        detail = payload.get("carbonTopicDetail")
-        if not detail:
-            return None
-        detail["isMock"] = False
-        detail["topicData"] = payload.get("carbonTabData") or {}
-        return detail
+        return load_carbon_overview_snapshot()
     if topic_key in {"monthly", "monthly-report"}:
-        detail = payload.get("monthlyTopicDetail")
-        if not detail:
+        overview = load_monthly_overview_snapshot()
+        if not overview:
             return None
-        detail["isMock"] = False
-        detail["topicData"] = payload.get("monthlyTabData") or {}
-        return detail
+        return monthly_overview_to_topic(overview, payload.get("monthlyTopicDetail"))
     return None
 
 
@@ -251,18 +482,60 @@ def get_dashboard_panels() -> dict:
         return mysql_payload
 
     payload = load_dashboard_payload()
+    carbon_overview = load_carbon_overview_snapshot()
+    carbon_panel = {
+        "metrics": payload.get("carbonMetrics") or [],
+        "sources": payload.get("carbonSources") or [],
+        "reductions": payload.get("reductionMeasures") or [],
+    }
+    if carbon_overview:
+        summary = carbon_overview["summary"]
+        carbon_panel = {
+            "metrics": summary[:3] + [{
+                "label": carbon_overview["carbonCostLabel"],
+                "value": carbon_overview["carbonCostValue"],
+                "unit": carbon_overview["carbonCostUnit"],
+                "sub": "项目初步测算，尚未正式财务确认",
+            }],
+            "sources": [
+                {"name": item["sourceName"], "value": item["totalEmission"]}
+                for item in carbon_overview["emissionSources"]
+            ],
+            "reductions": payload.get("reductionMeasures") or [],
+            "carbonCostLabel": carbon_overview["carbonCostLabel"],
+            "carbonCostValue": carbon_overview["carbonCostValue"],
+            "carbonCostUnit": carbon_overview["carbonCostUnit"],
+            "sourceMode": carbon_overview["sourceMode"],
+            "isMock": carbon_overview["isMock"],
+            "dataNature": carbon_overview["dataNature"],
+        }
+    monthly_overview = load_monthly_overview_snapshot()
+    monthly_panel = payload.get("monthlyReport") or {}
+    if monthly_overview:
+        summary = monthly_overview["summary"]
+        monthly_panel = {
+            "month": monthly_overview["reportMonth"],
+            "progress": monthly_overview["readinessRate"],
+            "pendingCount": summary["pendingTotal"],
+            "confirmCount": summary["pendingConfirmCount"],
+            "currentStatus": "资料归集",
+            "expectedCompletion": None,
+            "materials": [
+                {"name": item["taskName"], "owner": item["responsibleRole"], "deadline": item["deadline"]}
+                for item in monthly_overview["pendingTasks"]
+            ],
+            "sourceMode": monthly_overview["sourceMode"],
+            "isMock": monthly_overview["isMock"],
+            "dataNature": monthly_overview["dataNature"],
+        }
     return {
         "compliance": {
             "metrics": payload.get("complianceMetrics") or [],
             "effectiveness": payload.get("effectivenessItems") or [],
             "safeguards": payload.get("safeguardItems") or [],
         },
-        "carbon": {
-            "metrics": payload.get("carbonMetrics") or [],
-            "sources": payload.get("carbonSources") or [],
-            "reductions": payload.get("reductionMeasures") or [],
-        },
-        "monthly": payload.get("monthlyReport") or {},
+        "carbon": carbon_panel,
+        "monthly": monthly_panel,
         "timeline": payload.get("timelineSteps") or [],
         "gis": {
             "routePoints": payload.get("routePoints") or [],
@@ -299,24 +572,38 @@ def get_s01_detail() -> dict:
     if mysql_payload is not None:
         return mysql_payload
 
+    # P2.7: 收紧 SQLite/MODAL_S01 回退
+    # 正式缺数时禁止用旧 368 Mock 充数；无 MySQL 时须明确空/错误
     snapshot = get_snapshot("MODAL_S01")
     if snapshot is not None:
-        return snapshot["payload"]
+        # 仅在演示模式回退时使用快照（避免正式环境冒充 77/368）
+        import os
+        if os.environ.get("S01_ALLOW_DEMO", "1").strip() in {"1", "true", "True", "TRUE", "yes"}:
+            return snapshot["payload"]
 
-    with connect() as conn:
-        safety = conn.execute("SELECT * FROM safety_production WHERE project_id = 900001").fetchone()
-        stages = conn.execute("SELECT id, name, status, detail FROM construction_stage ORDER BY sequence_no").fetchall()
-    if safety is None:
-        return {}
-
+    # 正式环境无 MySQL 时返回明确空值，不冒充数据
     return {
-        "projectStartDate": safety["project_start_date"],
-        "currentDate": safety["current_date"],
-        "currentStage": safety["current_stage"],
-        "currentStageDetail": safety["current_stage_detail"],
-        "countingStatus": safety["counting_status"],
-        "updateTime": safety["update_time"],
-        "constructionStages": [row_to_dict(row) for row in stages],
+        "continuousDays": None,
+        "statisticsStart": None,
+        "cycleStartDate": None,
+        "statisticsAsOf": None,
+        "countingStatus": "CONTINUOUS",
+        "latestInterruptDate": None,
+        "latestInterruptReason": None,
+        "pendingDeterminationCount": 0,
+        "confirmationStatus": None,
+        "confirmationBatchId": None,
+        "demoBatchCode": None,
+        "currentConstructionStage": None,
+        "currentStage": None,
+        "currentStageDetail": None,
+        "dataNature": "formal",
+        "isDemo": False,
+        "scope": "formal",
+        "conclusion": "待建设单位确认",
+        "projectStartDate": None,
+        "currentDate": None,
+        "updateTime": None,
     }
 
 
@@ -773,6 +1060,179 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "数据库不存在，请先执行 python server/init_db.py"}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
 
+        if path == "/api/project/sections":
+            section_code = (query.get("sectionCode") or [None])[0]
+            payload = try_mysql(mysql_api.get_project_sections, section_code)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL 项目合同段数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path == "/api/project/phases":
+            at_time = (query.get("at") or query.get("currentTime") or [None])[0]
+            payload = try_mysql(mysql_api.get_project_phases, at_time)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL 项目阶段数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path == "/api/project/engineering-objects":
+            section_code = (query.get("sectionCode") or [None])[0]
+            object_type = (query.get("objectType") or [None])[0]
+            at_time = (query.get("at") or query.get("currentTime") or [None])[0]
+            payload = try_mysql(mysql_api.get_project_engineering_objects, section_code, object_type, at_time)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL 工程对象数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path == "/api/environment/monitor-points":
+            section_code = (query.get("sectionCode") or [None])[0]
+            monitor_category = (query.get("monitorCategory") or query.get("monitorType") or [None])[0]
+            at_time = (query.get("at") or query.get("currentTime") or [None])[0]
+            payload = try_mysql(mysql_api.get_environment_monitor_points, section_code, monitor_category, at_time)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL 环境监测点位数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path == "/api/environment/e01/events":
+            payload = try_mysql(mysql_api.get_e01_events)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL E01 超标事件数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/environment/e01/points/") and path.endswith("/trend"):
+            point_id_raw = path.removeprefix("/api/environment/e01/points/").removesuffix("/trend").rstrip("/")
+            try:
+                point_id = int(point_id_raw)
+            except ValueError:
+                bad_request(self, "E01 点位 ID 必须为整数")
+                return
+            factor_code = (query.get("factorCode") or query.get("factor_code") or [None])[0]
+            payload = try_mysql(mysql_api.get_e01_point_trend, point_id, factor_code)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "E01 点位趋势不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/environment/e01/events/"):
+            event_id_raw = path.removeprefix("/api/environment/e01/events/").rstrip("/")
+            try:
+                event_id = int(event_id_raw)
+            except ValueError:
+                bad_request(self, "E01 事件 ID 必须为整数")
+                return
+            payload = try_mysql(mysql_api.get_e01_event_detail, event_id)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "E01 超标事件不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
+        if path == "/api/environment/e02/issues":
+            scope = (query.get("scope") or [None])[0]
+            payload = try_mysql(mysql_api.get_e02_issues, scope)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL E02 环保问题数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/environment/e02/issues/"):
+            issue_id_raw = path.removeprefix("/api/environment/e02/issues/").rstrip("/")
+            try:
+                issue_id = int(issue_id_raw)
+            except ValueError:
+                bad_request(self, "E02 问题 ID 必须为整数")
+                return
+            payload = try_mysql(mysql_api.get_e02_issue_detail, issue_id)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "E02 问题不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
+        # E03 水土保持问题工作台 API
+        if path == "/api/environment/e03/issues":
+            scope = (query.get("scope") or [None])[0]
+            payload = try_mysql(mysql_api.get_e03_issues, scope)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL E03 水保问题数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/environment/e03/issues/"):
+            issue_id_raw = path.removeprefix("/api/environment/e03/issues/").rstrip("/")
+            try:
+                issue_id = int(issue_id_raw)
+            except ValueError:
+                bad_request(self, "E03 问题 ID 必须为整数")
+                return
+            scope = (query.get("scope") or [None])[0]
+            payload = try_mysql(mysql_api.get_e03_issue_detail, issue_id, scope)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "E03 问题不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
+        # S02 安全风险点工作台 API
+        if path == "/api/social/s02/risks":
+            payload = try_mysql(mysql_api.get_s02_risks)
+            if payload is None:
+                json_response(self, {"code": 503, "message": "MySQL S02 安全风险点数据不可用", "data": None}, HTTPStatus.SERVICE_UNAVAILABLE)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/social/s02/risks/"):
+            risk_id_raw = path.removeprefix("/api/social/s02/risks/").rstrip("/")
+            try:
+                risk_id = int(risk_id_raw)
+            except ValueError:
+                bad_request(self, "S02 风险点 ID 必须为整数")
+                return
+            payload = try_mysql(mysql_api.get_s02_risk_detail, risk_id)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "S02 风险点不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/environment/monitor-points/"):
+            point_path = path.removeprefix("/api/environment/monitor-points/")
+            is_history = point_path.endswith("/history")
+            point_id_raw = point_path.removesuffix("/history").rstrip("/") if is_history else point_path
+            try:
+                point_id = int(point_id_raw)
+            except ValueError:
+                bad_request(self, "监测点位 ID 必须为整数")
+                return
+            if is_history:
+                try:
+                    limit = int((query.get("limit") or ["20"])[0])
+                except ValueError:
+                    bad_request(self, "limit 必须为整数")
+                    return
+                payload = try_mysql(mysql_api.get_environment_monitor_point_history, point_id, limit)
+            else:
+                at_time = (query.get("at") or query.get("currentTime") or [None])[0]
+                payload = try_mysql(mysql_api.get_environment_monitor_point, point_id, at_time)
+            if payload is None:
+                json_response(self, {"code": 404, "message": "监测点位不存在或 MySQL 数据不可用", "data": None}, HTTPStatus.NOT_FOUND)
+            else:
+                json_response(self, payload)
+            return
+
         if path == "/api/esg/gis/layers":
             project_id = (query.get("projectId") or ["LUOYI-ESG"])[0]
             section_id = (query.get("sectionId") or [None])[0]
@@ -781,7 +1241,8 @@ class Handler(BaseHTTPRequestHandler):
             visible_layer_ids = [item for item in (visible_layer_ids_raw or "").split(",") if item] or None
             payload = try_mysql(mysql_api.get_gis_layers, project_id, section_id, current_time, visible_layer_ids)
             if payload is None:
-                json_response(self, {"code": 500, "message": "GIS MySQL 数据暂不可用", "data": []}, HTTPStatus.OK)
+                payload = gis_static_layers(project_id, section_id, current_time, visible_layer_ids)
+                json_response(self, payload, HTTPStatus.OK)
             else:
                 json_response(self, payload)
             return
@@ -793,7 +1254,37 @@ class Handler(BaseHTTPRequestHandler):
             layer_id = (query.get("layerId") or [None])[0]
             payload = try_mysql(mysql_api.get_gis_features, project_id, layer_id, section_id, current_time)
             if payload is None:
-                json_response(self, {"code": 500, "message": "GIS MySQL 数据暂不可用", "data": []}, HTTPStatus.OK)
+                payload = gis_static_features(project_id, layer_id, section_id, current_time)
+                json_response(self, payload, HTTPStatus.OK)
+            else:
+                json_response(self, payload)
+            return
+
+        if path.startswith("/api/esg/gis/features/"):
+            project_id = (query.get("projectId") or ["LUOYI-ESG"])[0]
+            feature_path = path.removeprefix("/api/esg/gis/features/")
+            if feature_path.endswith("/business-links"):
+                feature_id = unquote(feature_path.removesuffix("/business-links").rstrip("/"))
+                payload = try_mysql(mysql_api.get_gis_feature_business_links, feature_id, project_id)
+                if payload is None:
+                    json_response(self, {"code": 500, "message": "GIS feature business links MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
+                else:
+                    json_response(self, payload)
+                return
+
+            if feature_path.endswith("/relations"):
+                feature_id = unquote(feature_path.removesuffix("/relations").rstrip("/"))
+                payload = try_mysql(mysql_api.get_gis_feature_relations, feature_id, project_id)
+                if payload is None:
+                    json_response(self, {"code": 500, "message": "GIS feature relations MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
+                else:
+                    json_response(self, payload)
+                return
+
+            feature_id = unquote(feature_path)
+            payload = try_mysql(mysql_api.get_gis_feature_detail, feature_id, project_id)
+            if payload is None:
+                json_response(self, {"code": 500, "message": "GIS feature detail MySQL 数据暂不可用", "data": None}, HTTPStatus.OK)
             else:
                 json_response(self, payload)
             return
@@ -804,6 +1295,48 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/dashboard/panels":
             json_response(self, get_dashboard_panels())
+            return
+
+        if path == "/api/carbon/benefit-overview":
+            topic = get_dashboard_topic("carbon")
+            if topic is None:
+                not_found(self)
+            else:
+                json_response(self, topic)
+            return
+
+        if path == "/api/monthly-report/readiness":
+            report_period = (query.get("reportPeriod") or [""])[0]
+            if not report_period:
+                json_response(
+                    self,
+                    {"code": 400, "message": "reportPeriod不能为空", "data": None},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            readiness = try_mysql(
+                monthly_report_readiness.get_monthly_report_readiness,
+                report_period,
+            )
+            if readiness is None:
+                json_response(
+                    self,
+                    {"code": 404, "message": f"未找到月报资料归集数据：{report_period}", "data": None},
+                    HTTPStatus.NOT_FOUND,
+                )
+            else:
+                json_response(self, readiness)
+            return
+
+        if path in {"/api/monthly/readiness", "/api/monthly/report-overview"}:
+            report_period = (query.get("reportMonth") or query.get("reportPeriod") or [""])[0] or None
+            overview = try_mysql(monthly_report_overview.get_monthly_report_overview, report_period)
+            if overview is None:
+                overview = load_monthly_overview_snapshot(report_period)
+            if overview is None:
+                not_found(self)
+            else:
+                json_response(self, overview)
             return
 
         if path.startswith("/api/dashboard/topics/"):

@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import type { KpiKey, KpiDetailConfig } from '@/types/dashboard'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
+import type { KpiKey, KpiDetailConfig, KpiModalFocusContext } from '@/types/dashboard'
+import type { E01CategoryFilter, E01OpenPoint, E01PanelLayer } from '@/types/e01'
+import type { E02CategoryFilter, E02IssueItem, E02PanelLayer } from '@/types/e02'
+import type { E03CategoryFilter, E03IssueItem, E03PanelLayer } from '@/types/e03'
+import type { S02CategoryFilter, S02PanelLayer, S02RiskItem } from '@/types/s02'
 import { kpiDetails, carbonTopicDetail, monthlyTopicDetail } from '@/data/dashboard.mock'
 import { getDashboardKpiDetail, getDashboardTopic } from '@/services/api'
 import HeaderNav from '@/components/layout/HeaderNav.vue'
@@ -13,6 +18,12 @@ import CarbonBenefitPanel from '@/components/panels/CarbonBenefitPanel.vue'
 import MonthlyReportPanel from '@/components/panels/MonthlyReportPanel.vue'
 import ConstructionTimeline from '@/components/panels/ConstructionTimeline.vue'
 import KpiDetailModal from '@/components/modal/KpiDetailModal.vue'
+import E01WorkspacePanel from '@/components/e01/E01WorkspacePanel.vue'
+import E02WorkspacePanel from '@/components/e02/E02WorkspacePanel.vue'
+import E03WorkspacePanel from '@/components/e03/E03WorkspacePanel.vue'
+import S02WorkspacePanel from '@/components/s02/S02WorkspacePanel.vue'
+
+const router = useRouter()
 
 const SCREEN_WIDTH = 1920
 const SCREEN_HEIGHT = 1080
@@ -44,32 +55,484 @@ function handleResize() {
 const activeKpiKey = ref<KpiKey | null>(null)
 const activeTopicDetail = ref<KpiDetailConfig | null>(null)
 const apiKpiDetails = ref<Partial<Record<KpiKey, KpiDetailConfig>>>({})
+const kpiFocusContext = ref<KpiModalFocusContext | null>(null)
 
-const isKpiModalOpen = computed(() => activeKpiKey.value !== null || activeTopicDetail.value !== null)
+const e01Active = ref(false)
+const e01Layer = ref<E01PanelLayer>('overview')
+const e01CategoryFilter = ref<E01CategoryFilter>('ALL')
+const e01SelectedPointId = ref<number | null>(null)
+const e01OpenPoints = ref<E01OpenPoint[]>([])
+
+const e02Active = ref(false)
+const e02Layer = ref<E02PanelLayer>('overview')
+const e02CategoryFilter = ref<E02CategoryFilter>('ALL')
+const e02SelectedIssueId = ref<number | null>(null)
+const e02Issues = ref<E02IssueItem[]>([])
+
+const e03Active = ref(false)
+const e03Layer = ref<E03PanelLayer>('overview')
+const e03CategoryFilter = ref<E03CategoryFilter>('ALL')
+const e03SelectedIssueId = ref<number | null>(null)
+const e03Issues = ref<E03IssueItem[]>([])
+
+const s02Active = ref(false)
+const s02Layer = ref<S02PanelLayer>('overview')
+const s02CategoryFilter = ref<S02CategoryFilter>('ALL')
+const s02SelectedRiskId = ref<number | null>(null)
+const s02Risks = ref<S02RiskItem[]>([])
+const s02PendingSelectCode = ref<string | null>(null)
+
+const gisPanelRef = ref<{
+  captureMapState: () => unknown
+  restoreMapState: () => void
+  focusPoint: (point: E01OpenPoint) => void
+  fitPoints: (points: E01OpenPoint[]) => void
+  resetView: () => void
+  focusE02Issue: (issue: E02IssueItem) => void
+  fitE02Issues: (issues: E02IssueItem[]) => void
+  focusE03Issue: (issue: E03IssueItem) => void
+  fitE03Issues: (issues: E03IssueItem[]) => void
+  focusS02Risk: (risk: S02RiskItem) => void
+  fitS02Risks: (risks: S02RiskItem[]) => void
+} | null>(null)
+
+const isKpiModalOpen = computed(
+  () => !e01Active.value && !e02Active.value && !e03Active.value && !s02Active.value
+    && (activeKpiKey.value !== null || activeTopicDetail.value !== null),
+)
 const activeDetail = computed(() => {
   if (activeTopicDetail.value) return activeTopicDetail.value
   if (activeKpiKey.value) return apiKpiDetails.value[activeKpiKey.value] || kpiDetails[activeKpiKey.value]
   return null
 })
 
+const e01VisiblePoints = computed(() => {
+  if (e01CategoryFilter.value === 'ALL') return e01OpenPoints.value
+  return e01OpenPoints.value.filter((p) => p.monitorCategory === e01CategoryFilter.value)
+})
+
+const E02_STATUS_GROUP_BY_FILTER: Record<Exclude<E02CategoryFilter, 'ALL'>, string> = {
+  RECTIFYING: 'rectifying',
+  PENDING_REVIEW: 'pendingReview',
+  PENDING_CLOSURE: 'pendingClosure',
+}
+
+const e02VisibleIssues = computed(() => {
+  if (e02CategoryFilter.value === 'ALL') return e02Issues.value
+  const group = E02_STATUS_GROUP_BY_FILTER[e02CategoryFilter.value]
+  return e02Issues.value.filter((i) => i.statusGroup === group)
+})
+
+const E03_STATUS_GROUP_BY_FILTER: Record<Exclude<E03CategoryFilter, 'ALL'>, string> = {
+  RECTIFYING: 'rectifying',
+  PENDING_REVIEW: 'pendingReview',
+  PENDING_CLOSURE: 'pendingClosure',
+}
+
+const e03VisibleIssues = computed(() => {
+  if (e03CategoryFilter.value === 'ALL') return e03Issues.value
+  const group = E03_STATUS_GROUP_BY_FILTER[e03CategoryFilter.value]
+  return e03Issues.value.filter((i) => i.statusGroup === group)
+})
+
+const s02VisibleRisks = computed(() => {
+  if (s02CategoryFilter.value === 'ALL') return s02Risks.value
+  if (s02CategoryFilter.value === 'MAJOR') {
+    return s02Risks.value.filter((r) => r.riskLevel === '重大')
+  }
+  return s02Risks.value.filter((r) => r.riskLevel === '较大')
+})
+
 let bodyOverflow = ''
+
+function fitCurrentCategory() {
+  nextTick(() => {
+    gisPanelRef.value?.fitPoints(e01VisiblePoints.value)
+  })
+}
+
+function fitCurrentE02Category() {
+  nextTick(() => {
+    gisPanelRef.value?.fitE02Issues(e02VisibleIssues.value)
+  })
+}
+
+function fitCurrentE03Category() {
+  nextTick(() => {
+    gisPanelRef.value?.fitE03Issues(e03VisibleIssues.value)
+  })
+}
+
+function fitCurrentS02Category() {
+  nextTick(() => {
+    gisPanelRef.value?.fitS02Risks(s02VisibleRisks.value)
+  })
+}
+
+async function openE01Workspace() {
+  if (e02Active.value) closeE02Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (s02Active.value) closeS02Workspace()
+  if (!e01Active.value) {
+    gisPanelRef.value?.captureMapState()
+  }
+  e01Active.value = true
+  e01Layer.value = 'overview'
+  e01CategoryFilter.value = 'ALL'
+  e01SelectedPointId.value = null
+  activeKpiKey.value = null
+  activeTopicDetail.value = null
+  kpiFocusContext.value = null
+}
+
+function closeE01Workspace() {
+  e01Active.value = false
+  e01Layer.value = 'overview'
+  e01CategoryFilter.value = 'ALL'
+  e01SelectedPointId.value = null
+  e01OpenPoints.value = []
+  gisPanelRef.value?.restoreMapState()
+}
+
+async function openE02Workspace() {
+  if (e01Active.value) closeE01Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (s02Active.value) closeS02Workspace()
+  if (!e02Active.value) {
+    gisPanelRef.value?.captureMapState()
+  }
+  e02Active.value = true
+  e02Layer.value = 'overview'
+  e02CategoryFilter.value = 'ALL'
+  e02SelectedIssueId.value = null
+  activeKpiKey.value = null
+  activeTopicDetail.value = null
+  kpiFocusContext.value = null
+}
+
+function closeE02Workspace() {
+  e02Active.value = false
+  e02Layer.value = 'overview'
+  e02CategoryFilter.value = 'ALL'
+  e02SelectedIssueId.value = null
+  e02Issues.value = []
+  gisPanelRef.value?.restoreMapState()
+}
+
+async function openE03Workspace() {
+  if (e01Active.value) closeE01Workspace()
+  if (e02Active.value) closeE02Workspace()
+  if (s02Active.value) closeS02Workspace()
+  if (!e03Active.value) {
+    gisPanelRef.value?.captureMapState()
+  }
+  e03Active.value = true
+  e03Layer.value = 'overview'
+  e03CategoryFilter.value = 'ALL'
+  e03SelectedIssueId.value = null
+  activeKpiKey.value = null
+  activeTopicDetail.value = null
+  kpiFocusContext.value = null
+}
+
+function closeE03Workspace() {
+  e03Active.value = false
+  e03Layer.value = 'overview'
+  e03CategoryFilter.value = 'ALL'
+  e03SelectedIssueId.value = null
+  e03Issues.value = []
+  gisPanelRef.value?.restoreMapState()
+}
+
+async function openS02Workspace(options?: { sourceId?: string | null }) {
+  if (e01Active.value) closeE01Workspace()
+  if (e02Active.value) closeE02Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (!s02Active.value) {
+    gisPanelRef.value?.captureMapState()
+  }
+  s02Active.value = true
+  s02Layer.value = 'overview'
+  s02CategoryFilter.value = 'ALL'
+  s02SelectedRiskId.value = null
+  s02PendingSelectCode.value = options?.sourceId || null
+  activeKpiKey.value = null
+  activeTopicDetail.value = null
+  kpiFocusContext.value = null
+}
+
+function closeS02Workspace() {
+  s02Active.value = false
+  s02Layer.value = 'overview'
+  s02CategoryFilter.value = 'ALL'
+  s02SelectedRiskId.value = null
+  s02Risks.value = []
+  s02PendingSelectCode.value = null
+  gisPanelRef.value?.restoreMapState()
+}
+
+function handleE03OverviewReady(issues: E03IssueItem[]) {
+  e03Issues.value = issues
+  e03SelectedIssueId.value = null
+  fitCurrentE03Category()
+}
+
+function handleE03ChangeCategory(category: E03CategoryFilter) {
+  const same = e03CategoryFilter.value === category
+  e03CategoryFilter.value = category
+  e03SelectedIssueId.value = null
+  e03Layer.value = 'overview'
+  fitCurrentE03Category()
+}
+
+function handleE03SelectIssue(issue: E03IssueItem) {
+  if (e03SelectedIssueId.value === issue.id) {
+    handleE03ClearSelection()
+    return
+  }
+  e03Layer.value = 'overview'
+  e03SelectedIssueId.value = issue.id
+  if (issue.canLocate) {
+    gisPanelRef.value?.focusE03Issue(issue)
+  }
+}
+
+function handleE03IssueSelectFromMap(issueId: number) {
+  const issue = e03VisibleIssues.value.find((item) => item.id === issueId)
+    || e03Issues.value.find((item) => item.id === issueId)
+  if (issue) handleE03SelectIssue(issue)
+}
+
+function handleE03ClearSelection() {
+  e03SelectedIssueId.value = null
+  e03Layer.value = 'overview'
+}
+
+function handleE02OverviewReady(issues: E02IssueItem[]) {
+  e02Issues.value = issues
+  e02SelectedIssueId.value = null
+  fitCurrentE02Category()
+}
+
+function handleE02ChangeCategory(category: E02CategoryFilter) {
+  const same = e02CategoryFilter.value === category
+  e02CategoryFilter.value = category
+  e02SelectedIssueId.value = null
+  e02Layer.value = 'overview'
+  fitCurrentE02Category()
+}
+
+function handleE02SelectIssue(issue: E02IssueItem) {
+  if (e02SelectedIssueId.value === issue.id) {
+    handleE02ClearSelection()
+    return
+  }
+  e02Layer.value = 'overview'
+  e02SelectedIssueId.value = issue.id
+  if (issue.canLocate) {
+    gisPanelRef.value?.focusE02Issue(issue)
+  }
+}
+
+function handleE02IssueSelectFromMap(issueId: number) {
+  const issue = e02VisibleIssues.value.find((item) => item.id === issueId)
+    || e02Issues.value.find((item) => item.id === issueId)
+  if (issue) handleE02SelectIssue(issue)
+}
+
+function handleE02ClearSelection() {
+  e02SelectedIssueId.value = null
+  e02Layer.value = 'overview'
+}
+
+function handleS02OverviewReady(risks: S02RiskItem[]) {
+  s02Risks.value = risks
+  s02SelectedRiskId.value = null
+  fitCurrentS02Category()
+  const pending = s02PendingSelectCode.value
+  if (pending) {
+    s02PendingSelectCode.value = null
+    const matched = risks.find((r) => r.businessCode === pending)
+      || risks.find((r) => String(r.id) === pending)
+    if (matched) handleS02SelectRisk(matched)
+  }
+}
+
+function handleS02ChangeCategory(category: S02CategoryFilter) {
+  s02CategoryFilter.value = category
+  s02SelectedRiskId.value = null
+  s02Layer.value = 'overview'
+  fitCurrentS02Category()
+}
+
+function handleS02SelectRisk(risk: S02RiskItem) {
+  if (s02SelectedRiskId.value === risk.id) {
+    handleS02ClearSelection()
+    return
+  }
+  s02Layer.value = 'overview'
+  s02SelectedRiskId.value = risk.id
+  if (risk.canLocate) {
+    gisPanelRef.value?.focusS02Risk(risk)
+  }
+}
+
+function handleS02RiskSelectFromMap(riskId: number) {
+  const risk = s02VisibleRisks.value.find((item) => item.id === riskId)
+    || s02Risks.value.find((item) => item.id === riskId)
+  if (risk) handleS02SelectRisk(risk)
+}
+
+function handleS02ClearSelection() {
+  s02SelectedRiskId.value = null
+  s02Layer.value = 'overview'
+}
+
+function handleE01OverviewReady(points: E01OpenPoint[]) {
+  e01OpenPoints.value = points
+  e01SelectedPointId.value = null
+  fitCurrentCategory()
+}
+
+function handleE01ChangeCategory(category: E01CategoryFilter) {
+  const same = e01CategoryFilter.value === category
+  e01CategoryFilter.value = category
+  e01SelectedPointId.value = null
+  e01Layer.value = 'overview'
+  if (same) {
+    fitCurrentCategory()
+  } else {
+    fitCurrentCategory()
+  }
+}
+
+function handleE01SelectPoint(point: E01OpenPoint) {
+  if (e01SelectedPointId.value === point.pointId) {
+    handleE01ClearSelection()
+    return
+  }
+  e01Layer.value = 'overview'
+  e01SelectedPointId.value = point.pointId
+  if (point.canLocate) {
+    gisPanelRef.value?.focusPoint(point)
+  }
+}
+
+function handleE01PointSelectFromMap(pointId: number) {
+  const point = e01VisiblePoints.value.find((item) => item.pointId === pointId)
+    || e01OpenPoints.value.find((item) => item.pointId === pointId)
+  if (point) handleE01SelectPoint(point)
+}
+
+function handleE01ClearSelection() {
+  e01SelectedPointId.value = null
+  e01Layer.value = 'overview'
+  fitCurrentCategory()
+}
 
 async function handleKpiSelect(key: string) {
   const kpiKey = key as KpiKey
+  if (kpiKey === 'E01') {
+    await openE01Workspace()
+    return
+  }
+  if (kpiKey === 'E02') {
+    await openE02Workspace()
+    return
+  }
+  if (kpiKey === 'E03') {
+    await openE03Workspace()
+    return
+  }
+  if (kpiKey === 'S02') {
+    await openS02Workspace()
+    return
+  }
+  if (e01Active.value) closeE01Workspace()
+  if (e02Active.value) closeE02Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (s02Active.value) closeS02Workspace()
   if (kpiDetails[kpiKey]) {
     if (kpiKey !== 'S01') {
       const detail = await getDashboardKpiDetail(kpiKey)
       if (detail) {
         apiKpiDetails.value[kpiKey] = detail
+      } else {
+        // B2-fix: API 失败时写入 loadError 错误壳
+        const base = kpiDetails[kpiKey]
+        apiKpiDetails.value[kpiKey] = { ...base, loadError: true } as KpiDetailConfig
       }
     }
+    kpiFocusContext.value = null
     activeKpiKey.value = kpiKey
     activeTopicDetail.value = null
     lockBodyScroll()
   }
 }
 
+async function handleRetryKpi() {
+  const kpiKey = activeKpiKey.value
+  if (!kpiKey || kpiKey === 'S01') return
+  const detail = await getDashboardKpiDetail(kpiKey)
+  if (detail) {
+    apiKpiDetails.value[kpiKey] = detail
+  } else {
+    // B2-fix: 重试仍失败，保持错误态
+    const existing = apiKpiDetails.value[kpiKey] || kpiDetails[kpiKey]
+    if (existing) {
+      apiKpiDetails.value[kpiKey] = { ...existing, loadError: true } as KpiDetailConfig
+    }
+  }
+}
+
+async function openKpiFromBusinessLink(payload: {
+  targetType: 'E02' | 'E03' | 'S02'
+  sourceId: string
+  sourceTable?: string
+  gisFeatureId?: string
+  title?: string
+}) {
+  if (e01Active.value) closeE01Workspace()
+  if (e02Active.value) closeE02Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (s02Active.value) closeS02Workspace()
+  const kpiKey = payload.targetType as KpiKey
+  if (kpiKey === 'E02') {
+    await openE02Workspace()
+    return
+  }
+  if (kpiKey === 'E03') {
+    await openE03Workspace()
+    return
+  }
+  if (kpiKey === 'S02') {
+    await openS02Workspace({ sourceId: payload.sourceId })
+    return
+  }
+  if (!kpiDetails[kpiKey]) return
+  if (kpiKey !== 'S01') {
+    const detail = await getDashboardKpiDetail(kpiKey)
+    if (detail) {
+      apiKpiDetails.value[kpiKey] = detail
+    }
+  }
+  kpiFocusContext.value = {
+    sourceId: payload.sourceId,
+    sourceTable: payload.sourceTable,
+    gisFeatureId: payload.gisFeatureId,
+    from: 'gis',
+    title: payload.title,
+  }
+  activeKpiKey.value = kpiKey
+  activeTopicDetail.value = null
+  lockBodyScroll()
+}
+
 async function handleTopicSelect(topicKey: string) {
+  if (e01Active.value) closeE01Workspace()
+  if (e02Active.value) closeE02Workspace()
+  if (e03Active.value) closeE03Workspace()
+  if (s02Active.value) closeS02Workspace()
   if (topicKey === 'CARBON') {
     activeTopicDetail.value = await getDashboardTopic('carbon') || carbonTopicDetail
   } else if (topicKey === 'MONTHLY') {
@@ -77,19 +540,71 @@ async function handleTopicSelect(topicKey: string) {
   } else {
     return
   }
+  kpiFocusContext.value = null
   activeKpiKey.value = null
   lockBodyScroll()
+}
+
+function handleNavClick(key: string) {
+  if (key === 'dashboard') {
+    // already here
+  } else if (key === 'assistant') {
+    if (e01Active.value) closeE01Workspace()
+    if (e02Active.value) closeE02Workspace()
+    if (e03Active.value) closeE03Workspace()
+    if (s02Active.value) closeS02Workspace()
+    router.push('/assistant')
+  } else if (key === 'workspace') {
+    if (e01Active.value) closeE01Workspace()
+    if (e02Active.value) closeE02Workspace()
+    if (e03Active.value) closeE03Workspace()
+    if (s02Active.value) closeS02Workspace()
+    router.push('/workspace')
+  }
 }
 
 function handleCloseModal() {
   activeKpiKey.value = null
   activeTopicDetail.value = null
+  kpiFocusContext.value = null
   unlockBodyScroll()
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && isKpiModalOpen.value) {
-    handleCloseModal()
+  if (e.key === 'Escape') {
+    if (e01Active.value) {
+      if (e01SelectedPointId.value != null) {
+        handleE01ClearSelection()
+      } else {
+        closeE01Workspace()
+      }
+      return
+    }
+    if (e02Active.value) {
+      if (e02SelectedIssueId.value != null) {
+        handleE02ClearSelection()
+      } else {
+        closeE02Workspace()
+      }
+      return
+    }
+    if (e03Active.value) {
+      if (e03SelectedIssueId.value != null) {
+        handleE03ClearSelection()
+      } else {
+        closeE03Workspace()
+      }
+      return
+    }
+    if (s02Active.value) {
+      if (s02SelectedRiskId.value != null) {
+        handleS02ClearSelection()
+      } else {
+        closeS02Workspace()
+      }
+      return
+    }
+    if (isKpiModalOpen.value) handleCloseModal()
   }
 }
 
@@ -102,6 +617,26 @@ function unlockBodyScroll() {
   document.body.style.overflow = bodyOverflow
 }
 
+watch(e01Active, (active) => {
+  if (active) lockBodyScroll()
+  else if (!e02Active.value && !e03Active.value && !s02Active.value) unlockBodyScroll()
+})
+
+watch(e02Active, (active) => {
+  if (active) lockBodyScroll()
+  else if (!e01Active.value && !e03Active.value && !s02Active.value) unlockBodyScroll()
+})
+
+watch(e03Active, (active) => {
+  if (active) lockBodyScroll()
+  else if (!e01Active.value && !e02Active.value && !s02Active.value) unlockBodyScroll()
+})
+
+watch(s02Active, (active) => {
+  if (active) lockBodyScroll()
+  else if (!e01Active.value && !e02Active.value && !e03Active.value) unlockBodyScroll()
+})
+
 onMounted(() => {
   handleResize()
   window.addEventListener('resize', handleResize)
@@ -111,7 +646,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleKeydown)
-  if (isKpiModalOpen.value) {
+  if (isKpiModalOpen.value || e01Active.value || e02Active.value || e03Active.value || s02Active.value) {
     unlockBodyScroll()
   }
 })
@@ -125,38 +660,120 @@ onUnmounted(() => {
         transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
       }"
     >
-      <div class="dashboard-page">
+      <div class="dashboard-page" :class="{ 'is-e01-mode': e01Active, 'is-e02-mode': e02Active, 'is-e03-mode': e03Active, 'is-s02-mode': s02Active }">
         <div class="dashboard-header">
-          <HeaderNav />
+          <HeaderNav active-key="dashboard" @navigate="handleNavClick" />
         </div>
-        <div class="dashboard-kpi">
-          <TopKpiGroups @select="handleKpiSelect" />
-        </div>
-        <div class="dashboard-body">
+        <div class="dashboard-body" :class="{ 'is-e01-mode': e01Active, 'is-e02-mode': e02Active, 'is-e03-mode': e03Active, 'is-s02-mode': s02Active }">
           <div class="dashboard-left">
+            <div class="dashboard-kpi">
+              <TopKpiGroups :group-keys="['E', 'S']" @select="handleKpiSelect" />
+            </div>
             <div class="dashboard-gis">
-              <GisOverviewCesiumPanel v-if="gisConfig.useRealGisOnDashboard" />
+              <GisOverviewCesiumPanel
+                v-if="gisConfig.useRealGisOnDashboard"
+                ref="gisPanelRef"
+                :e01-active="e01Active"
+                :e01-open-points="e01OpenPoints"
+                :e01-visible-points="e01VisiblePoints"
+                :e01-selected-point-id="e01SelectedPointId"
+                :e02-active="e02Active"
+                :e02-issues="e02Issues"
+                :e02-selected-issue-id="e02SelectedIssueId"
+                :e03-active="e03Active"
+                :e03-issues="e03Issues"
+                :e03-selected-issue-id="e03SelectedIssueId"
+                :s02-active="s02Active"
+                :s02-risks="s02Risks"
+                :s02-selected-risk-id="s02SelectedRiskId"
+                @open-kpi-source="openKpiFromBusinessLink"
+                @e01-point-select="handleE01PointSelectFromMap"
+                @e01-clear-selection="handleE01ClearSelection"
+                @e02-issue-select="handleE02IssueSelectFromMap"
+                @e02-clear-selection="handleE02ClearSelection"
+                @e03-issue-select="handleE03IssueSelectFromMap"
+                @e03-clear-selection="handleE03ClearSelection"
+                @s02-risk-select="handleS02RiskSelectFromMap"
+                @s02-clear-selection="handleS02ClearSelection"
+              />
               <GisOverviewPanel v-else />
             </div>
             <div class="dashboard-timeline">
               <ConstructionTimeline />
             </div>
           </div>
-          <div class="dashboard-right">
-            <div class="dashboard-compliance">
-              <ComplianceRiskPanel />
+          <div class="dashboard-right" :class="{ 'is-e01-workspace': e01Active, 'is-e02-workspace': e02Active, 'is-e03-workspace': e03Active, 'is-s02-workspace': s02Active }">
+            <div class="dashboard-kpi">
+              <TopKpiGroups :group-keys="['G']" @select="handleKpiSelect" />
             </div>
-            <div class="dashboard-carbon" @click="handleTopicSelect('CARBON')" style="cursor: pointer;">
-              <CarbonBenefitPanel />
-            </div>
-            <div class="dashboard-monthly" @click="handleTopicSelect('MONTHLY')" style="cursor: pointer;">
-              <MonthlyReportPanel />
+            <div class="dashboard-e01-slot">
+              <E01WorkspacePanel
+                v-if="e01Active"
+                :selected-point-id="e01SelectedPointId"
+                :layer="e01Layer"
+                :category-filter="e01CategoryFilter"
+                @close="closeE01Workspace"
+                @change-category="handleE01ChangeCategory"
+                @select-point="handleE01SelectPoint"
+                @clear-selection="handleE01ClearSelection"
+                @overview-ready="handleE01OverviewReady"
+              />
+              <E02WorkspacePanel
+                v-else-if="e02Active"
+                :selected-issue-id="e02SelectedIssueId"
+                :layer="e02Layer"
+                :category-filter="e02CategoryFilter"
+                @close="closeE02Workspace"
+                @change-category="handleE02ChangeCategory"
+                @select-issue="handleE02SelectIssue"
+                @clear-selection="handleE02ClearSelection"
+                @overview-ready="handleE02OverviewReady"
+              />
+              <E03WorkspacePanel
+                v-else-if="e03Active"
+                :selected-issue-id="e03SelectedIssueId"
+                :layer="e03Layer"
+                :category-filter="e03CategoryFilter"
+                @close="closeE03Workspace"
+                @change-category="handleE03ChangeCategory"
+                @select-issue="handleE03SelectIssue"
+                @clear-selection="handleE03ClearSelection"
+                @overview-ready="handleE03OverviewReady"
+              />
+              <S02WorkspacePanel
+                v-else-if="s02Active"
+                :selected-risk-id="s02SelectedRiskId"
+                :layer="s02Layer"
+                :category-filter="s02CategoryFilter"
+                @close="closeS02Workspace"
+                @change-category="handleS02ChangeCategory"
+                @select-risk="handleS02SelectRisk"
+                @clear-selection="handleS02ClearSelection"
+                @overview-ready="handleS02OverviewReady"
+              />
+              <template v-else>
+                <div class="dashboard-compliance">
+                  <ComplianceRiskPanel />
+                </div>
+                <div class="dashboard-carbon" style="cursor: pointer;" @click="handleTopicSelect('CARBON')">
+                  <CarbonBenefitPanel />
+                </div>
+                <div class="dashboard-monthly" style="cursor: pointer;" @click="handleTopicSelect('MONTHLY')">
+                  <MonthlyReportPanel />
+                </div>
+              </template>
             </div>
           </div>
         </div>
 
         <Teleport to="body">
-          <KpiDetailModal v-if="isKpiModalOpen && activeDetail" :detail="activeDetail" @close="handleCloseModal" />
+          <KpiDetailModal
+            v-if="isKpiModalOpen && activeDetail"
+            :detail="activeDetail"
+            :focus-context="kpiFocusContext"
+            @close="handleCloseModal"
+            @retry="handleRetryKpi"
+          />
         </Teleport>
       </div>
     </div>

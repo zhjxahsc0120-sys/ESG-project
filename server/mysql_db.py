@@ -2,17 +2,34 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 import pymysql
 from pymysql.cursors import DictCursor
 
 
+def _load_local_env() -> None:
+    """Load the project-local .env without overriding an explicit process env."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_local_env()
+
+
 MYSQL_CONFIG = {
     "host": os.getenv("LUOYI_MYSQL_HOST", "127.0.0.1"),
     "port": int(os.getenv("LUOYI_MYSQL_PORT", "3307")),
     "user": os.getenv("LUOYI_MYSQL_USER", "luoyi_app"),
-    "password": os.getenv("LUOYI_MYSQL_PASSWORD", "Luoyi_App_2026!"),
+    "password": os.getenv("LUOYI_MYSQL_PASSWORD", ""),
     "database": os.getenv("LUOYI_MYSQL_DATABASE", "luoyi_esg"),
     "charset": "utf8mb4",
     "cursorclass": DictCursor,

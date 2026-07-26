@@ -20,24 +20,32 @@ function updateOption() {
   if (!chart) return
   chart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 10, right: 30, bottom: 10, left: 10, containLabel: true },
+    grid: { top: 8, right: 44, bottom: 8, left: 4, containLabel: true },
     xAxis: {
       type: 'value',
       show: false,
-      max: Math.max(...props.data.map((d) => d.value), 1),
+      max: Math.max(...props.data.map((d) => d.value), 1) * 1.15,
     },
     yAxis: {
       type: 'category',
       data: props.data.map((d) => d.label),
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: '#8fa9c8', fontSize: 11 },
+      axisLabel: {
+        color: '#8fa9c8',
+        fontSize: 12,
+        margin: 10,
+        interval: 0,
+        overflow: 'truncate',
+        width: 108,
+      },
     },
     series: [
       {
         type: 'bar',
         data: props.data.map((d) => d.value),
-        barWidth: 10,
+        barWidth: 14,
+        barCategoryGap: '42%',
         itemStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
             { offset: 0, color: 'rgba(47, 156, 255, 0.3)' },
@@ -50,7 +58,8 @@ function updateOption() {
           position: 'right',
           formatter: '{c} 项',
           color: '#e8f3ff',
-          fontSize: 11,
+          fontSize: 12,
+          distance: 6,
         },
       },
     ],
