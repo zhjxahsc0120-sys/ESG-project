@@ -1,50 +1,50 @@
-{
-  "current_owner": "Codex/Cursor",
-  "current_task": "BASELINE recorded — assistant + smart entry 2026-07-28",
-  "task_files": [
-    "_handoff/BASELINE_assistant_smartentry_20260728.md",
-    "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
-    "_handoff/ESG智能数据填报_AI解析结果展示优化_V1.0实施说明_20260727.md"
-  ],
-  "task_file": "_handoff/BASELINE_assistant_smartentry_20260728.md",
-  "design_files": [
-    "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
-    "_handoff/ESG智能助手_上级环保检查资料包_设计问答与校核报告_20260727.md",
-    "_handoff/ESG智能数据填报_AI解析结果JSON_V1.0_20260727.md"
-  ],
-  "design_file": "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
-  "verify_file": "_handoff/BASELINE_assistant_smartentry_20260728.md",
-  "report_file": "_handoff/TRAE_DONE_REPORT.md",
-  "status": "BASELINED_assistant_smartentry_20260728",
-  "assistant_qa_design": "IMPLEMENTED",
-  "assistant_business_ui": "IMPLEMENTED_V1.1",
-  "smart_entry_ai_report": "IMPLEMENTED_V1.0",
-  "v02_smart_upload_verdict": "PARTIAL",
-  "updated_at": "2026-07-28",
-  "baseline_tag": "baseline/assistant-smartentry-20260728",
-  "homepage_baseline_tag": "baseline/l1-l2-gis-20260726",
-  "workspace_ui_baseline_tag": "baseline/workspace-ui-20260726",
-  "baseline_doc": "_handoff/BASELINE_assistant_smartentry_20260728.md",
-  "baseline_commit": "",
-  "branch": "trae/carbon-page",
-  "header_title": "宜罗高速 ESG 数字化看板",
-  "nav_order": [
-    "工作台首页",
-    "ESG智能助手",
-    "ESG智能数据填报"
-  ],
-  "routes": {
-    "smart_ingest": "/#/workspace?t=smart-upload（默认 → WorkspaceSmartEntry）",
-    "assistant": "/#/assistant",
-    "carbon": "NOT_WIRED — components untracked, no route/nav"
-  },
-  "claimed_files": [
-    "src/components/workspace/WorkspaceSmartEntry.vue",
-    "src/views/WorkspacePage.vue",
-    "src/views/AssistantPage.vue",
-    "src/components/assistant/",
-    "server/assistant_qa.py",
-    "public/samples/assistant-compliance-packs/"
-  ],
-  "notes": "2026-07-28: Tagged baseline/assistant-smartentry-20260728. Prior tags baseline/l1-l2-gis-20260726 and baseline/workspace-ui-20260726 retained. Carbon NOT wired. V0.2 smart-upload DB gate still PARTIAL."
+﻿{
+    "current_owner":  "Codex/Cursor",
+    "current_task":  "BASELINE recorded — assistant + smart entry 2026-07-28",
+    "task_files":  [
+                       "_handoff/BASELINE_assistant_smartentry_20260728.md",
+                       "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
+                       "_handoff/ESG智能数据填报_AI解析结果展示优化_V1.0实施说明_20260727.md"
+                   ],
+    "task_file":  "_handoff/BASELINE_assistant_smartentry_20260728.md",
+    "design_files":  [
+                         "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
+                         "_handoff/ESG智能助手_上级环保检查资料包_设计问答与校核报告_20260727.md",
+                         "_handoff/ESG智能数据填报_AI解析结果JSON_V1.0_20260727.md"
+                     ],
+    "design_file":  "_handoff/ESG智能助手_问答设计更新_V1.0_20260727.md",
+    "verify_file":  "_handoff/BASELINE_assistant_smartentry_20260728.md",
+    "report_file":  "_handoff/TRAE_DONE_REPORT.md",
+    "status":  "BASELINED_assistant_smartentry_20260728",
+    "assistant_qa_design":  "IMPLEMENTED",
+    "assistant_business_ui":  "IMPLEMENTED_V1.1",
+    "smart_entry_ai_report":  "IMPLEMENTED_V1.0",
+    "v02_smart_upload_verdict":  "PARTIAL",
+    "updated_at":  "2026-07-28",
+    "baseline_tag":  "baseline/assistant-smartentry-20260728",
+    "homepage_baseline_tag":  "baseline/l1-l2-gis-20260726",
+    "workspace_ui_baseline_tag":  "baseline/workspace-ui-20260726",
+    "baseline_doc":  "_handoff/BASELINE_assistant_smartentry_20260728.md",
+    "baseline_commit":  "ba54c31af21e0a687f81b8fe113557fb25216f81",
+    "branch":  "trae/carbon-page",
+    "header_title":  "宜罗高速 ESG 数字化看板",
+    "nav_order":  [
+                      "工作台首页",
+                      "ESG智能助手",
+                      "ESG智能数据填报"
+                  ],
+    "routes":  {
+                   "smart_ingest":  "/#/workspace?t=smart-upload（默认 → WorkspaceSmartEntry）",
+                   "assistant":  "/#/assistant",
+                   "carbon":  "NOT_WIRED — components untracked, no route/nav"
+               },
+    "claimed_files":  [
+                          "src/components/workspace/WorkspaceSmartEntry.vue",
+                          "src/views/WorkspacePage.vue",
+                          "src/views/AssistantPage.vue",
+                          "src/components/assistant/",
+                          "server/assistant_qa.py",
+                          "public/samples/assistant-compliance-packs/"
+                      ],
+    "notes":  "2026-07-28: Tagged baseline/assistant-smartentry-20260728. Prior tags baseline/l1-l2-gis-20260726 and baseline/workspace-ui-20260726 retained. Carbon NOT wired. V0.2 smart-upload DB gate still PARTIAL."
 }
