@@ -25,7 +25,7 @@
   "homepage_baseline_tag": "baseline/l1-l2-gis-20260726",
   "workspace_ui_baseline_tag": "baseline/workspace-ui-20260726",
   "baseline_doc": "_handoff/BASELINE_assistant_smartentry_20260728.md",
-  "baseline_commit": "3fbfebe71374e1acf21076f67b7349a1c686308b",
+  "baseline_commit": "fc06c2e8d8874591f71471e91c98ba27f2231e33",
   "branch": "trae/carbon-page",
   "header_title": "宜罗高速 ESG 数字化看板",
   "nav_order": [

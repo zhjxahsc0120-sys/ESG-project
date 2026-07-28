@@ -5,7 +5,7 @@
 | **日期** | 2026-07-28 |
 | **分支** | `trae/carbon-page` |
 | **Tag** | `baseline/assistant-smartentry-20260728` |
-| **Commit** | `3fbfebe71374e1acf21076f67b7349a1c686308b` |
+| **Commit** | `fc06c2e8d8874591f71471e91c98ba27f2231e33` |
 | **用途** | 记录当前产品态：智能助手业务化问答、上级检查资料包、ESG智能数据填报 AI 解析报告、首页大标题「宜罗高速 ESG 数字化看板」 |
 
 ## 与既有基线共存
