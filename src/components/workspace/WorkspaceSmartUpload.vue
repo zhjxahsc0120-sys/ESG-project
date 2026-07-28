@@ -1,366 +1,146 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   Upload,
-  FolderOpen,
-  Link2,
   FileText,
-  FileImage,
   FileSpreadsheet,
+  FileImage,
   AlertTriangle,
-  Search,
   RefreshCw,
-  Trash2,
-  XCircle,
-  Copy,
+  CheckCircle,
   Eye,
-  Sparkles,
-  Layers,
   ChevronLeft,
   ChevronRight,
+  Search,
+  Sparkles,
+  Link2,
+  Archive,
+  Loader2,
+  XCircle,
+  FileWarning,
 } from 'lucide-vue-next'
 import {
-  parseQueue as mockParseQueue,
-  documents as mockDocuments,
-} from '@/data/workspace.mock'
-import {
-  getParseQueue,
-  uploadWorkspaceBinaryFile,
   startParseFile,
   getParseJob,
   getParseFields,
   getMatchCandidates,
   confirmParseJob,
 } from '@/services/api'
-import type { ParseQueueItem, AiParseResult, SuggestedTask, Document, DuplicateFileInfo } from '@/types/workspace'
-import type { ParseFieldItem, MatchCandidateItem, ParseJobDetail } from '@/services/api'
+import type {
+  ParseFieldItem,
+  MatchCandidateItem,
+  ParseJobDetail,
+  UploadFileResponse,
+  ConfirmParseResponse,
+} from '@/services/api'
 import { emitWorkspaceRefresh, onWorkspaceRefresh } from '@/utils/workspaceRefresh'
 
-const EMPTY_PARSE_RESULT: AiParseResult = {
-  documentType: '—',
-  cycle: '—',
-  module: 'E',
-  moduleName: '环境环保',
-  responsibilityUnit: '—',
-  projectSection: '—',
-  engineeringObject: '—',
-  validPeriod: '—',
-  suggestedTask: '—',
-  suggestedKpiCode: '',
-  suggestedKpiName: '上传文件后自动识别',
-  suggestedReport: '',
-  confidence: 0,
-  duplicateCount: 0,
-  duplicateTip: '',
+// ─── Types ───
+type WorkbenchState = 'idle' | 'uploading' | 'parsing' | 'ready' | 'done' | 'failed'
+type RightTab = 'summary' | 'data' | 'anomaly'
+
+interface UploadedFileInfo {
+  name: string
+  size: number
+  type: string
+  fileId?: number
 }
 
-const SAMPLE_FILE_URL = '/samples/%E7%BD%97%E5%AE%9C%E9%AB%98%E9%80%9F_2026%E5%B9%B47%E6%9C%88%E6%B0%B4%E4%BF%9D%E7%9B%91%E6%B5%8B%E6%9C%88%E6%8A%A5%E6%91%98%E8%A6%81.csv'
-const SAMPLE_FILE_NAME = '罗宜高速_2026年7月水保监测月报摘要.csv'
+// ─── Constants ───
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
 
-const showUploadArea = ref(true)
-const selectedTasks = ref<string[]>([])
-const parseQueueList = ref<ParseQueueItem[]>([...mockParseQueue])
-const aiParseResult = ref<AiParseResult>({ ...EMPTY_PARSE_RESULT })
-const suggestedTasks = ref<SuggestedTask[]>([])
-const extractedFields = ref<ParseFieldItem[]>([])
-const hasRealParse = ref(false)
-const fileInputRef = ref<HTMLInputElement | null>(null)
+const PARSE_STAGES = [
+  { key: 'file_read', label: '文件读取完成', progress: 15 },
+  { key: 'classification', label: '文档分类完成', progress: 30 },
+  { key: 'extraction', label: '正文与表格提取完成', progress: 60 },
+  { key: 'field_identify', label: '业务字段识别完成', progress: 80 },
+  { key: 'match_complete', label: '异常检查与关联推荐完成', progress: 100 },
+] as const
 
-const currentFileId = ref<number | null>(null)
-const currentJobId = ref<number | null>(null)
-const currentJob = ref<ParseJobDetail | null>(null)
+const FLOW_STEPS = [
+  { key: 'upload', label: '上传资料' },
+  { key: 'parse', label: 'AI解析' },
+  { key: 'review', label: '核对结果' },
+  { key: 'confirm', label: '确认入库' },
+] as const
+
+const FIELD_STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  identified: { label: '已识别', color: '#69e36f', bg: 'rgba(105,227,111,0.12)' },
+  review: { label: '建议核对', color: '#ffb347', bg: 'rgba(255,179,71,0.12)' },
+  conflict: { label: '存在冲突', color: '#ff4f5e', bg: 'rgba(255,79,94,0.12)' },
+  missing: { label: '待补充', color: '#8fa9c8', bg: 'rgba(143,169,200,0.1)' },
+  corrected: { label: '已人工修正', color: '#2f9cff', bg: 'rgba(47,156,255,0.12)' },
+}
+
+const CLASSIFICATION_OPTIONS: Array<{ value: 'E' | 'S' | 'G' | '综合' | '暂不确定'; label: string; color: string }> = [
+  { value: 'E', label: 'E·环境', color: '#69e36f' },
+  { value: 'S', label: 'S·社会', color: '#2f9cff' },
+  { value: 'G', label: 'G·治理', color: '#a66cff' },
+  { value: '综合', label: '综合', color: '#8fa9c8' },
+  { value: '暂不确定', label: '暂不确定', color: '#5a7a9a' },
+]
+
+// ─── State ───
+const workbenchState = ref<WorkbenchState>('idle')
 const pageMessage = ref('')
 const pageMessageType = ref<'success' | 'error' | 'info'>('info')
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const statusFilter = ref<string>('全部')
-const searchKeyword = ref('')
-const currentPage = ref(1)
-const pageSize = 10
-const selectedQueueItems = ref<string[]>([])
-const showDuplicateModal = ref(false)
-const currentDuplicateFile = ref<DuplicateFileInfo | null>(null)
-const editingField = ref<string | null>(null)
+const uploadProgress = ref(0)
+const uploadLoaded = ref(0)
+const uploadTotal = ref(0)
+const uploadedFiles = ref<UploadedFileInfo[]>([])
+
+const parseProgress = ref(0)
+const parseStageLabel = ref('')
+const currentJobId = ref<number | null>(null)
+const currentFileId = ref<number | null>(null)
+const currentJob = ref<ParseJobDetail | null>(null)
+const extractedFields = ref<ParseFieldItem[]>([])
+const matchCandidates = ref<MatchCandidateItem[]>([])
+
+const rightTab = ref<RightTab>('summary')
+const selectedFieldKey = ref<string | null>(null)
+const editingFieldKey = ref<string | null>(null)
 const editFieldValue = ref('')
+const editReason = ref('')
 
-const statusOptions = ['全部', '解析中', '待确认', '疑似重复', '解析失败', '已入库']
+const esgClassification = ref<'E' | 'S' | 'G' | '综合' | '暂不确定'>('E')
+const selectedCandidateIds = ref<number[]>([])
+const acknowledgedWarnings = ref(false)
 
-function showMessage(message: string, type: 'success' | 'error' | 'info' = 'info') {
-  pageMessage.value = message
-  pageMessageType.value = type
-}
+const doneResult = ref<ConfirmParseResponse | null>(null)
+const doneSummary = ref('')
 
+const activeFileIndex = ref(0)
+const sourcePage = ref(1)
+const sourceTotalPages = ref(1)
+const sourceSearchKeyword = ref('')
+
+let parsePollTimer: ReturnType<typeof setInterval> | null = null
+let stageTimer: ReturnType<typeof setInterval> | null = null
 let stopWorkspaceRefresh: (() => void) | null = null
 
+// ─── Lifecycle ───
 onMounted(() => {
-  loadData()
-  stopWorkspaceRefresh = onWorkspaceRefresh(payload => {
-    if (payload.scopes.includes('parse-queue')) {
-      loadData()
-    }
+  stopWorkspaceRefresh = onWorkspaceRefresh(() => {
+    // External refresh trigger - no action needed for one-page workbench
   })
 })
 
 onUnmounted(() => {
+  if (parsePollTimer) clearInterval(parsePollTimer)
+  if (stageTimer) clearInterval(stageTimer)
   stopWorkspaceRefresh?.()
 })
 
-async function loadData() {
-  const data = await getParseQueue()
-  if (data && data.items && data.items.length > 0) {
-    parseQueueList.value = data.items as ParseQueueItem[]
-  }
+// ─── Helpers ───
+function showMessage(msg: string, type: 'success' | 'error' | 'info' = 'info') {
+  pageMessage.value = msg
+  pageMessageType.value = type
 }
 
-async function loadJobDetails(jobId: number) {
-  const [jobRes, fieldsRes, candidatesRes] = await Promise.all([
-    getParseJob(jobId),
-    getParseFields(jobId),
-    getMatchCandidates(jobId),
-  ])
-  if (jobRes) currentJob.value = jobRes
-  if (fieldsRes && fieldsRes.items.length > 0) {
-    extractedFields.value = fieldsRes.items
-    updateAiResultFromFields(fieldsRes.items, jobRes)
-    hasRealParse.value = true
-  }
-  if (candidatesRes && candidatesRes.items.length > 0) {
-    updateCandidatesFromApi(candidatesRes.items, currentJob.value?.fileName || '')
-    if (!aiParseResult.value.suggestedTask || aiParseResult.value.suggestedTask === '—') {
-      aiParseResult.value.suggestedTask = suggestedTasks.value[0]?.taskName || '—'
-    }
-  } else {
-    suggestedTasks.value = []
-    selectedTasks.value = []
-  }
-}
-
-function avgConfidence(fields: ParseFieldItem[]): number {
-  if (!fields.length) return 0
-  const sum = fields.reduce((acc, f) => acc + (Number(f.confidence) || 0), 0)
-  return Math.round(sum / fields.length)
-}
-
-function updateAiResultFromFields(fields: ParseFieldItem[], job?: ParseJobDetail | null) {
-  const map: Record<string, string> = {}
-  for (const f of fields) {
-    map[f.fieldKey] = f.fieldValue
-  }
-  const module = (map['esg_module'] || map['module'] || 'E') as 'E' | 'S' | 'G'
-  const validStart = map['valid_start_date'] || ''
-  const validEnd = map['valid_end_date'] || ''
-  const validPeriod = validStart && validEnd ? `${validStart} ~ ${validEnd}` : (validStart || validEnd || '—')
-  const conf = job?.confidence != null ? Math.round(Number(job.confidence)) : avgConfidence(fields)
-  aiParseResult.value = {
-    documentType: map['document_type'] || '—',
-    cycle: map['period'] || '—',
-    module,
-    moduleName: module === 'E' ? '环境环保' : module === 'S' ? '社会责任' : module === 'G' ? '治理合规' : '环境环保',
-    responsibilityUnit: map['responsible_unit'] || map['responsibility_unit'] || '—',
-    projectSection: map['project_section'] || '—',
-    engineeringObject: map['engineering_object'] || '—',
-    validPeriod,
-    suggestedTask: map['suggested_task'] || suggestedTasks.value[0]?.taskName || '—',
-    suggestedKpiCode: map['suggested_kpi_code'] || '',
-    suggestedKpiName: map['suggested_kpi_name'] || '',
-    suggestedReport: map['period'] ? `${map['period']} ESG月报` : '',
-    confidence: conf,
-    duplicateCount: 0,
-    duplicateTip: '',
-  }
-}
-
-function updateCandidatesFromApi(candidates: MatchCandidateItem[], fileName: string) {
-  suggestedTasks.value = candidates.map(c => ({
-    id: String(c.candidateId),
-    documentName: fileName,
-    taskName: c.taskName,
-    module: c.module as 'E' | 'S' | 'G',
-    moduleName: c.module === 'E' ? '环境环保' : c.module === 'S' ? '社会责任' : '治理合规',
-    matchRate: c.matchScore,
-    reuseCount: c.reuseCount,
-    confirmStatus: c.candidateStatus === 'PENDING' ? '待确认' : c.candidateStatus === 'ACCEPTED' ? '已关联' : c.candidateStatus,
-    matchBasis: c.matchReason,
-  }))
-  if (candidates.length > 0) {
-    const best = candidates.reduce((a, b) => (a.matchScore > b.matchScore ? a : b))
-    selectedTasks.value = [String(best.candidateId)]
-  }
-}
-
-function handleSelectFile() {
-  fileInputRef.value?.click()
-}
-
-async function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  hasRealParse.value = false
-  extractedFields.value = []
-  aiParseResult.value = { ...EMPTY_PARSE_RESULT }
-  suggestedTasks.value = []
-  selectedTasks.value = []
-
-  const uploadRes = await uploadWorkspaceBinaryFile(file, {
-    uploaderId: 10001,
-    uploaderName: '项目管理员',
-  })
-  if (uploadRes) {
-    currentFileId.value = uploadRes.fileId
-    if (uploadRes.duplicateStatus === 'DUPLICATE') {
-      showMessage(`文件已接收，但检测到相同哈希文件。当前文件ID：${uploadRes.fileId}，匹配文件ID：${uploadRes.matchedFileId || '-'}`, 'info')
-    } else {
-      showMessage(`文件已接收并写入存储区。文件ID：${uploadRes.fileId}`, 'success')
-    }
-    const parseRes = await startParseFile(uploadRes.fileId)
-    if (parseRes) {
-      currentJobId.value = parseRes.jobId
-      await loadData()
-      await loadJobDetails(parseRes.jobId)
-      const sourceHint = currentJob.value?.parseSource === 'content'
-        ? '已从文件内容识别字段'
-        : '已按文件名规则识别'
-      const summaryHint = currentJob.value?.summary ? `：${currentJob.value.summary}` : ''
-      showMessage(`${sourceHint}${summaryHint}。JobID：${parseRes.jobId}`, 'success')
-    }
-  } else {
-    showMessage('上传接口未响应，请确认后端已启动。', 'error')
-  }
-  input.value = ''
-}
-
-function handleDownloadSample() {
-  const link = document.createElement('a')
-  link.href = SAMPLE_FILE_URL
-  link.download = SAMPLE_FILE_NAME
-  link.click()
-}
-
-function handleBatchImport() {
-  showMessage('批量导入功能为原型预留，暂未接入批量导入流程。', 'info')
-}
-
-function handleSelectFromCenter() {
-  showMessage('从资料中心选择功能为原型预留，暂未接入选择器。', 'info')
-}
-
-function toggleTaskSelect(taskId: string) {
-  const index = selectedTasks.value.indexOf(taskId)
-  if (index > -1) {
-    selectedTasks.value.splice(index, 1)
-  } else {
-    selectedTasks.value.push(taskId)
-  }
-}
-
-function handleCancel() {
-  showMessage('已取消当前操作。', 'info')
-}
-
-function handleSaveToCenter() {
-  showMessage('保存到资料中心为原型预留操作；如需真实入库，请使用"确认入库并关联"。', 'info')
-}
-
-async function handleConfirmAndLink() {
-  if (!currentJobId.value) {
-    showMessage('请先上传并解析文件。', 'error')
-    return
-  }
-  const confirmedFields = suggestedTasks.value.length > 0
-    ? [{ fieldKey: 'document_type', confirmedValue: aiParseResult.value.documentType }]
-    : []
-  const acceptedCandidateIds = selectedTasks.value
-    .map(id => Number(id))
-    .filter(id => !isNaN(id))
-  const res = await confirmParseJob(currentJobId.value, {
-    confirmedFields,
-    acceptedCandidateIds,
-    operatorId: 10001,
-    operatorName: '项目管理员',
-    comment: '前端确认入库',
-  })
-  if (res) {
-    const linkedSummary = res.linkedTasks && res.linkedTasks.length > 0
-      ? res.linkedTasks.map(task => {
-        const progress = task.progress ? `${task.progress.completed}/${task.progress.total}` : '-'
-        return `${task.taskName}${task.requirementName ? `：${task.requirementName}` : ''}（完整度 ${progress}）`
-      }).join('；')
-      : '未关联任务'
-    showMessage(`资料已入库并关联 ${res.linkedTaskCount} 个任务。DocumentID：${res.documentId}。${linkedSummary}`, 'success')
-    await loadData()
-    emitWorkspaceRefresh({
-      source: 'smart-upload',
-      scopes: ['summary', 'tasks', 'documents', 'parse-queue'],
-    })
-    currentJobId.value = null
-    currentJob.value = null
-  } else {
-    showMessage('确认入库接口未响应。', 'error')
-  }
-}
-
-function handleViewParseDetail() {
-  if (!currentJobId.value) {
-    showMessage('请先上传样例文件完成解析。', 'info')
-    return
-  }
-  loadJobDetails(currentJobId.value)
-  const engine = currentJob.value?.parseEngine || '解析引擎'
-  const count = extractedFields.value.length
-  showMessage(`${engine}：已识别 ${count} 个字段${currentJob.value?.summary ? `；${currentJob.value.summary}` : ''}`, 'info')
-}
-
-const highlightFieldKeys = [
-  'dust_exceed_count',
-  'noise_exceed_count',
-  'water_protection_issue_count',
-  'monitor_date',
-  'summary_note',
-]
-
-const highlightFields = computed(() =>
-  extractedFields.value.filter(f => highlightFieldKeys.includes(f.fieldKey)),
-)
-
-function handleViewDuplicateDetail(item: ParseQueueItem) {
-  currentDuplicateFile.value = {
-    id: item.id,
-    fileName: item.fileName,
-    fileHash: item.fileHash || 'SHA256: a1b2c3d4e5f6...',
-    fileSize: item.size,
-    cycle: aiParseResult.value.cycle,
-    uploadTime: item.uploadTime || '2026-08-10 16:20',
-    relatedTasks: ['2026年7月水保监测月报', '临时用地合规资料'],
-    similarity: 95,
-  }
-  showDuplicateModal.value = true
-}
-
-function handleViewFile(fileName: string) {
-  showMessage(`文件预览为原型展示，未接入真实文件存储服务。文件：${fileName}`, 'info')
-}
-
-function handleViewLink(taskName: string) {
-  showMessage(`查看关联详情为原型展示。任务：${taskName}`, 'info')
-}
-
-async function handleViewResult(item: ParseQueueItem) {
-  if (item.status === '疑似重复') {
-    handleViewDuplicateDetail(item)
-    return
-  }
-  if (item.jobId) {
-    currentJobId.value = item.jobId
-    await loadJobDetails(item.jobId)
-  } else if (currentJobId.value) {
-    await loadJobDetails(currentJobId.value)
-  } else {
-    showMessage(`当前队列项：${item.fileName}`, 'info')
-  }
-}
-
-function getModuleColor(module: string) {
+function getModuleColor(module: string): string {
   switch (module) {
     case 'E': return '#69e36f'
     case 'S': return '#2f9cff'
@@ -369,21 +149,13 @@ function getModuleColor(module: string) {
   }
 }
 
-function getStatusColor(status: string) {
-  switch (status) {
-    case '已关联': return '#69e36f'
-    case '匹配中': return '#2f9cff'
-    case '待确认': return '#ffb347'
-    case '解析中': return '#2f9cff'
-    case '已入库': return '#69e36f'
-    case '疑似重复': return '#ffb347'
-    case '解析失败': return '#ff4f5e'
-    default: return '#8fa9c8'
+function getModuleLabel(module: string): string {
+  switch (module) {
+    case 'E': return '环境环保'
+    case 'S': return '社会责任'
+    case 'G': return '治理合规'
+    default: return '综合'
   }
-}
-
-function isSelected(taskId: string) {
-  return selectedTasks.value.includes(taskId)
 }
 
 function getFileIcon(fileName: string) {
@@ -393,952 +165,1549 @@ function getFileIcon(fileName: string) {
   return FileText
 }
 
-function getQueueButtonAction(status: string): string {
-  if (status === '解析完成' || status === '已入库' || status === '待确认') return '查看结果'
-  if (status.includes('匹配中') || status.includes('解析中')) return '查看进度'
-  if (status === '疑似重复') return '处理重复'
-  if (status.includes('失败')) return '重新解析'
-  return '查看'
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const filteredQueue = computed(() => {
-  let list = parseQueueList.value
-  if (statusFilter.value !== '全部') {
-    list = list.filter(item => item.status === statusFilter.value)
+// ─── Flow Bar ───
+const currentFlowStep = computed(() => {
+  switch (workbenchState.value) {
+    case 'idle': return 0
+    case 'uploading': return 0
+    case 'parsing': return 1
+    case 'ready': return 2
+    case 'done': return 3
+    case 'failed': return 1
+    default: return 0
   }
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    list = list.filter(item => item.fileName.toLowerCase().includes(keyword))
-  }
-  return list
 })
 
-const paginatedQueue = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredQueue.value.slice(start, start + pageSize)
-})
-
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredQueue.value.length / pageSize)))
-
-function goToPage(page: number) {
-  if (page < 1 || page > totalPages.value) return
-  currentPage.value = page
+function getFlowStepClass(index: number): string {
+  const current = currentFlowStep.value
+  if (index < current) return 'completed'
+  if (index === current) return 'active'
+  return 'pending'
 }
 
-function getPageNumbers(): number[] {
-  const pages: number[] = []
-  const maxPages = 5
-  let start = Math.max(1, currentPage.value - Math.floor(maxPages / 2))
-  let end = Math.min(totalPages.value, start + maxPages - 1)
-  if (end - start + 1 < maxPages) {
-    start = Math.max(1, end - maxPages + 1)
-  }
-  for (let i = start; i <= end; i++) pages.push(i)
-  return pages
+// ─── Upload ───
+function handleSelectFile() {
+  fileInputRef.value?.click()
 }
 
-watch(filteredQueue, () => {
-  currentPage.value = 1
-})
-
-function toggleQueueItemSelect(id: string) {
-  const idx = selectedQueueItems.value.indexOf(id)
-  if (idx > -1) {
-    selectedQueueItems.value.splice(idx, 1)
-  } else {
-    selectedQueueItems.value.push(id)
+function handleDrop(event: DragEvent) {
+  event.preventDefault()
+  const files = event.dataTransfer?.files
+  if (files && files.length > 0) {
+    handleFiles(files)
   }
 }
 
-const isAllSelected = computed(() => {
-  return paginatedQueue.value.length > 0 && paginatedQueue.value.every(item => selectedQueueItems.value.includes(item.id))
-})
+function handleDragOver(event: DragEvent) {
+  event.preventDefault()
+}
 
-function toggleSelectAll() {
-  if (isAllSelected.value) {
-    selectedQueueItems.value = selectedQueueItems.value.filter(id => !paginatedQueue.value.some(item => item.id === id))
-  } else {
-    for (const item of paginatedQueue.value) {
-      if (!selectedQueueItems.value.includes(item.id)) {
-        selectedQueueItems.value.push(item.id)
+async function handleFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files) {
+    await handleFiles(input.files)
+  }
+  input.value = ''
+}
+
+async function handleFiles(files: FileList) {
+  if (!files || files.length === 0) return
+
+  workbenchState.value = 'uploading'
+  uploadProgress.value = 0
+  uploadLoaded.value = 0
+  uploadTotal.value = 0
+  uploadedFiles.value = []
+  pageMessage.value = ''
+
+  for (const file of Array.from(files)) {
+    const fileInfo: UploadedFileInfo = {
+      name: file.name,
+      size: file.size,
+      type: file.type || 'unknown',
+    }
+    uploadedFiles.value.push(fileInfo)
+
+    try {
+      const uploadRes = await uploadWithProgress(file, (loaded, total) => {
+        uploadLoaded.value = loaded
+        uploadTotal.value = total
+        uploadProgress.value = total > 0 ? Math.round((loaded / total) * 100) : 0
+      })
+
+      if (uploadRes) {
+        fileInfo.fileId = uploadRes.fileId
+        currentFileId.value = uploadRes.fileId
+
+        if (uploadRes.duplicateStatus === 'DUPLICATE') {
+          showMessage(`检测到疑似重复文件：${file.name}，匹配文件ID：${uploadRes.matchedFileId || '-'}`, 'info')
+        }
+      } else {
+        workbenchState.value = 'failed'
+        showMessage(`文件上传失败：${file.name}。请确认后端服务已启动。`, 'error')
+        return
       }
+    } catch {
+      workbenchState.value = 'failed'
+      showMessage(`文件上传异常：${file.name}`, 'error')
+      return
     }
   }
-}
 
-function handleRetryParse(item: ParseQueueItem) {
-  showMessage(`正在重新解析文件：${item.fileName}`, 'info')
-  const idx = parseQueueList.value.findIndex(i => i.id === item.id)
-  if (idx > -1) {
-    parseQueueList.value[idx].status = '解析中'
-    parseQueueList.value[idx].progress = 0
+  if (currentFileId.value) {
+    await startParsing(currentFileId.value)
   }
 }
 
-function handleClearFailed(item: ParseQueueItem) {
-  const idx = parseQueueList.value.findIndex(i => i.id === item.id)
-  if (idx > -1) {
-    parseQueueList.value.splice(idx, 1)
-    showMessage(`已清除失败记录：${item.fileName}`, 'success')
-  }
+function uploadWithProgress(
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<UploadFileResponse | null> {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest()
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('uploaderId', '10001')
+    formData.append('uploaderName', '项目管理员')
+
+    xhr.upload.addEventListener('progress', e => {
+      if (e.lengthComputable) {
+        onProgress(e.loaded, e.total)
+      }
+    })
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as UploadFileResponse)
+        } catch {
+          resolve(null)
+        }
+      } else {
+        resolve(null)
+      }
+    })
+
+    xhr.addEventListener('error', () => resolve(null))
+    xhr.addEventListener('abort', () => resolve(null))
+
+    xhr.open('POST', `${API_BASE}/api/workspace/files/upload`)
+    xhr.send(formData)
+  })
 }
 
-function handleBatchRetry() {
-  const failedItems = selectedQueueItems.value
-    .map(id => parseQueueList.value.find(i => i.id === id))
-    .filter(i => i && i.status === '解析失败') as ParseQueueItem[]
-  if (failedItems.length === 0) {
-    showMessage('请先选择解析失败的文件', 'info')
+// ─── Parse ───
+async function startParsing(fileId: number) {
+  workbenchState.value = 'parsing'
+  parseProgress.value = 0
+  parseStageLabel.value = '正在启动解析任务'
+
+  const parseRes = await startParseFile(fileId)
+  if (!parseRes) {
+    workbenchState.value = 'failed'
+    showMessage('解析任务启动失败，请确认后端服务已启动。', 'error')
     return
   }
-  for (const item of failedItems) {
-    handleRetryParse(item)
-  }
-  showMessage(`已批量重新解析 ${failedItems.length} 个文件`, 'success')
+
+  currentJobId.value = parseRes.jobId
+
+  let stageIndex = 0
+  parseStageLabel.value = PARSE_STAGES[0].label
+  parseProgress.value = PARSE_STAGES[0].progress
+
+  stageTimer = setInterval(() => {
+    stageIndex++
+    if (stageIndex < PARSE_STAGES.length) {
+      parseStageLabel.value = PARSE_STAGES[stageIndex].label
+      parseProgress.value = PARSE_STAGES[stageIndex].progress
+    }
+  }, 800)
+
+  parsePollTimer = setInterval(async () => {
+    const job = await getParseJob(parseRes.jobId)
+    if (!job) return
+
+    currentJob.value = job
+    const status = job.jobStatus?.toUpperCase()
+
+    if (status === 'WAIT_CONFIRM' || status === 'SUCCESS') {
+      if (parsePollTimer) { clearInterval(parsePollTimer); parsePollTimer = null }
+      if (stageTimer) { clearInterval(stageTimer); stageTimer = null }
+      parseProgress.value = 100
+      parseStageLabel.value = '解析完成'
+      await loadParseResults(parseRes.jobId)
+    } else if (status === 'FAILED') {
+      if (parsePollTimer) { clearInterval(parsePollTimer); parsePollTimer = null }
+      if (stageTimer) { clearInterval(stageTimer); stageTimer = null }
+      workbenchState.value = 'failed'
+      showMessage(`解析失败：${job.summary || '未知原因'}`, 'error')
+    }
+  }, 1500)
 }
 
-function handleBatchClearFailed() {
-  const failedItems = selectedQueueItems.value
-    .map(id => parseQueueList.value.find(i => i.id === id))
-    .filter(i => i && i.status === '解析失败') as ParseQueueItem[]
-  if (failedItems.length === 0) {
-    showMessage('请先选择解析失败的文件', 'info')
-    return
+async function loadParseResults(jobId: number) {
+  const [jobRes, fieldsRes, candidatesRes] = await Promise.all([
+    getParseJob(jobId),
+    getParseFields(jobId),
+    getMatchCandidates(jobId),
+  ])
+
+  if (jobRes) currentJob.value = jobRes
+  if (fieldsRes && fieldsRes.items.length > 0) {
+    extractedFields.value = fieldsRes.items
   }
-  for (const item of failedItems) {
-    const idx = parseQueueList.value.findIndex(i => i.id === item.id)
-    if (idx > -1) {
-      parseQueueList.value.splice(idx, 1)
+  if (candidatesRes) {
+    matchCandidates.value = candidatesRes.items
+  }
+
+  const moduleField = extractedFields.value.find(
+    f => f.fieldKey === 'esg_module' || f.fieldKey === 'module'
+  )
+  if (moduleField && moduleField.fieldValue) {
+    const mod = moduleField.fieldValue as 'E' | 'S' | 'G'
+    if (['E', 'S', 'G'].includes(mod)) {
+      esgClassification.value = mod
     }
   }
-  selectedQueueItems.value = []
-  showMessage(`已批量清除 ${failedItems.length} 条失败记录`, 'success')
+
+  selectedCandidateIds.value = []
+  acknowledgedWarnings.value = false
+
+  sourceTotalPages.value = Math.max(1, Math.ceil(extractedFields.value.length / 6))
+  sourcePage.value = 1
+  activeFileIndex.value = 0
+
+  workbenchState.value = 'ready'
+  rightTab.value = 'summary'
+
+  const fieldCount = extractedFields.value.length
+  const candidateCount = matchCandidates.value.length
+  const conflictCount = extractedFields.value.filter(f => getFieldStatus(f) === 'conflict').length
+  const reviewCount = extractedFields.value.filter(f => getFieldStatus(f) === 'review').length
+
+  let msg = `AI解析完成，识别 ${fieldCount} 项数据`
+  if (reviewCount > 0) msg += `，其中 ${reviewCount} 项建议核对`
+  if (conflictCount > 0) msg += `，${conflictCount} 项存在冲突`
+  if (candidateCount > 0) msg += `，推荐 ${candidateCount} 项业务关联`
+  msg += '。'
+  showMessage(msg, 'success')
 }
 
-function startEditField(field: string, value: string) {
-  editingField.value = field
-  editFieldValue.value = value
+// ─── Field Status ───
+function getFieldStatus(field: ParseFieldItem): string {
+  const status = field.confirmStatus?.toUpperCase()
+  if (status === 'CONFIRMED' || status === 'ACCEPTED') return 'corrected'
+  if (status === 'CONFLICT') return 'conflict'
+  if (status === 'REVIEW' || status === 'PENDING') {
+    if (!field.fieldValue || field.fieldValue === '—' || field.fieldValue === '') return 'missing'
+    return 'review'
+  }
+  return 'identified'
 }
 
-function saveEditField(field: string) {
-  if (field === 'documentType') aiParseResult.value.documentType = editFieldValue.value
-  if (field === 'cycle') aiParseResult.value.cycle = editFieldValue.value
-  if (field === 'responsibilityUnit') aiParseResult.value.responsibilityUnit = editFieldValue.value
-  if (field === 'projectSection') aiParseResult.value.projectSection = editFieldValue.value
-  if (field === 'engineeringObject') aiParseResult.value.engineeringObject = editFieldValue.value
-  if (field === 'validPeriod') aiParseResult.value.validPeriod = editFieldValue.value
-  if (field === 'suggestedTask') aiParseResult.value.suggestedTask = editFieldValue.value
-  if (field === 'suggestedKpiName') aiParseResult.value.suggestedKpiName = editFieldValue.value
-  editingField.value = null
+function getFieldStatusInfo(status: string) {
+  return FIELD_STATUS_MAP[status] || FIELD_STATUS_MAP.identified
+}
+
+// ─── Field Editing ───
+function startEditField(field: ParseFieldItem) {
+  editingFieldKey.value = field.fieldKey
+  editFieldValue.value = field.confirmedValue || field.fieldValue
+  editReason.value = ''
+}
+
+function saveEditField() {
+  if (!editingFieldKey.value) return
+
+  const idx = extractedFields.value.findIndex(f => f.fieldKey === editingFieldKey.value)
+  if (idx > -1) {
+    const isConflict = getFieldStatus(extractedFields.value[idx]) === 'conflict'
+    if (isConflict && !editReason.value.trim()) {
+      showMessage('存在冲突的字段必须填写修改原因', 'error')
+      return
+    }
+    extractedFields.value[idx] = {
+      ...extractedFields.value[idx],
+      confirmedValue: editFieldValue.value,
+      confirmStatus: 'CONFIRMED',
+    }
+  }
+
+  editingFieldKey.value = null
+  editFieldValue.value = ''
+  editReason.value = ''
   showMessage('已保存修改', 'success')
 }
 
 function cancelEditField() {
-  editingField.value = null
+  editingFieldKey.value = null
+  editFieldValue.value = ''
+  editReason.value = ''
 }
 
-function handleReuseExisting() {
-  showMessage('已复用已有资料，取消当前上传', 'success')
-  showDuplicateModal.value = false
+// ─── Source Linking ───
+function handleViewSource(field: ParseFieldItem) {
+  selectedFieldKey.value = field.fieldKey
+  const fieldIndex = extractedFields.value.findIndex(f => f.fieldKey === field.fieldKey)
+  sourcePage.value = Math.max(1, Math.ceil((fieldIndex + 1) / 6))
 }
 
-function handleUploadAsNewVersion() {
-  showMessage('已作为新版本上传', 'success')
-  showDuplicateModal.value = false
-}
-
-function handleConfirmDifferent() {
-  showMessage('已确认为不同资料，继续处理', 'success')
-  showDuplicateModal.value = false
-  const idx = parseQueueList.value.findIndex(i => i.id === currentDuplicateFile.value?.id)
+// ─── Business Association ───
+function toggleCandidate(candidateId: number) {
+  const idx = selectedCandidateIds.value.indexOf(candidateId)
   if (idx > -1) {
-    parseQueueList.value[idx].status = '待确认'
+    selectedCandidateIds.value.splice(idx, 1)
+  } else {
+    selectedCandidateIds.value.push(candidateId)
   }
 }
 
-function handleCancelUpload() {
-  showDuplicateModal.value = false
+// ─── Validation ───
+const conflictFields = computed(() =>
+  extractedFields.value.filter(f => getFieldStatus(f) === 'conflict' && !f.confirmedValue)
+)
+
+const missingFields = computed(() =>
+  extractedFields.value.filter(f => getFieldStatus(f) === 'missing')
+)
+
+const reviewFields = computed(() =>
+  extractedFields.value.filter(f => getFieldStatus(f) === 'review')
+)
+
+const hasUnresolvedConflicts = computed(() => conflictFields.value.length > 0)
+const hasMissingRequired = computed(() => missingFields.value.length > 0)
+const hasWarnings = computed(() => reviewFields.value.length > 0)
+
+const canConfirm = computed(() => {
+  if (hasUnresolvedConflicts.value) return false
+  if (hasMissingRequired.value) return false
+  if (hasWarnings.value && !acknowledgedWarnings.value) return false
+  return true
+})
+
+const confirmButtonText = computed(() => {
+  if (selectedCandidateIds.value.length > 0) return '确认入库并关联'
+  return '确认入库'
+})
+
+// ─── Confirm ───
+async function handleConfirm() {
+  if (!currentJobId.value || !canConfirm.value) return
+
+  const confirmedFields = extractedFields.value
+    .filter(f => f.confirmedValue)
+    .map(f => ({
+      fieldKey: f.fieldKey,
+      confirmedValue: f.confirmedValue as string,
+    }))
+
+  const acceptedCandidateIds = selectedCandidateIds.value.filter(id => !isNaN(id))
+
+  const res = await confirmParseJob(currentJobId.value, {
+    confirmedFields,
+    acceptedCandidateIds,
+    operatorId: 10001,
+    operatorName: '项目管理员',
+    comment: acknowledgedWarnings.value ? '已核对提醒项' : '前端确认入库',
+  })
+
+  if (res) {
+    doneResult.value = res
+    workbenchState.value = 'done'
+
+    const linkedNames = res.linkedTasks && res.linkedTasks.length > 0
+      ? res.linkedTasks.map(task => task.taskName).join('、')
+      : ''
+
+    doneSummary.value = `已形成 1 份资料档案（DocumentID：${res.documentId}）` +
+      (linkedNames ? `，关联 ${linkedNames}` : '，未关联业务事项') +
+      '，写入经人工确认的结构化数据。'
+
+    emitWorkspaceRefresh({
+      source: 'smart-upload',
+      scopes: ['summary', 'tasks', 'documents', 'parse-queue'],
+    })
+  } else {
+    showMessage('确认入库接口未响应，请确认后端服务已启动。', 'error')
+  }
 }
 
-function handleReuseAndRecommend(task: SuggestedTask) {
-  showMessage(`已复用并关联：${task.taskName}`, 'success')
+function handleReParse() {
+  resetToIdle()
 }
 
-function handleIgnoreRecommend(task: SuggestedTask) {
-  const idx = suggestedTasks.value.findIndex(t => t.id === task.id)
+function handleSaveDraft() {
+  showMessage('已暂存当前解析结果，可稍后继续确认。', 'info')
+}
+
+function handleContinue() {
+  resetToIdle()
+}
+
+function handleRetry() {
+  resetToIdle()
+}
+
+function resetToIdle() {
+  if (parsePollTimer) { clearInterval(parsePollTimer); parsePollTimer = null }
+  if (stageTimer) { clearInterval(stageTimer); stageTimer = null }
+  workbenchState.value = 'idle'
+  uploadedFiles.value = []
+  extractedFields.value = []
+  matchCandidates.value = []
+  selectedCandidateIds.value = []
+  acknowledgedWarnings.value = false
+  currentJobId.value = null
+  currentFileId.value = null
+  currentJob.value = null
+  doneResult.value = null
+  doneSummary.value = ''
+  pageMessage.value = ''
+  selectedFieldKey.value = null
+  editingFieldKey.value = null
+}
+
+// ─── Source Preview ───
+const activeFile = computed(() => uploadedFiles.value[activeFileIndex.value] || null)
+
+const sourceFieldsForPage = computed(() => {
+  const start = (sourcePage.value - 1) * 6
+  return extractedFields.value.slice(start, start + 6)
+})
+
+function goToSourcePage(page: number) {
+  if (page < 1 || page > sourceTotalPages.value) return
+  sourcePage.value = page
+}
+
+function selectFile(index: number) {
+  activeFileIndex.value = index
+  sourcePage.value = 1
+}
+
+// ─── Summary ───
+const summaryText = computed(() => {
+  if (currentJob.value?.summary) return currentJob.value.summary
+  const docType = extractedFields.value.find(f => f.fieldKey === 'document_type')?.fieldValue
+  const period = extractedFields.value.find(f => f.fieldKey === 'period')?.fieldValue
+  if (docType && period) return `本资料为${period}的${docType}。`
+  return '解析完成，请核对以下结构化结果。'
+})
+
+const metadataFields = computed(() => {
+  const map: Record<string, string> = {}
+  for (const f of extractedFields.value) {
+    map[f.fieldKey] = f.confirmedValue || f.fieldValue
+  }
+  return {
+    documentType: map['document_type'] || '—',
+    period: map['period'] || '—',
+    module: map['esg_module'] || map['module'] || 'E',
+    responsibleUnit: map['responsible_unit'] || map['responsibility_unit'] || '—',
+    projectSection: map['project_section'] || '—',
+    engineeringObject: map['engineering_object'] || '—',
+  }
+})
+
+const totalSizeText = computed(() => {
+  const total = uploadedFiles.value.reduce((sum, f) => sum + f.size, 0)
+  return formatFileSize(total)
+})
+
+// ─── Anomaly Tab ───
+const anomalies = computed(() => {
+  const list: Array<{ type: string; severity: string; message: string; fieldKey?: string }> = []
+  for (const f of extractedFields.value) {
+    const status = getFieldStatus(f)
+    if (status === 'conflict') {
+      list.push({
+        type: '字段冲突',
+        severity: 'blocking',
+        message: `字段「${f.fieldName}」存在冲突，AI识别值为「${f.fieldValue}」，需人工确认。`,
+        fieldKey: f.fieldKey,
+      })
+    }
+    if (status === 'missing') {
+      list.push({
+        type: '字段缺失',
+        severity: 'warning',
+        message: `字段「${f.fieldName}」未识别到值，待人工补充。`,
+        fieldKey: f.fieldKey,
+      })
+    }
+  }
+  return list
+})
+
+// ─── Editable metadata ───
+const editingMeta = ref<string | null>(null)
+const metaEditValue = ref('')
+
+function startEditMeta(key: string, value: string) {
+  editingMeta.value = key
+  metaEditValue.value = value === '—' ? '' : value
+}
+
+function saveEditMeta(key: string) {
+  const fieldKeyMap: Record<string, string> = {
+    documentType: 'document_type',
+    period: 'period',
+    responsibleUnit: 'responsible_unit',
+    projectSection: 'project_section',
+    engineeringObject: 'engineering_object',
+  }
+  const actualKey = fieldKeyMap[key] || key
+  const idx = extractedFields.value.findIndex(f => f.fieldKey === actualKey)
   if (idx > -1) {
-    suggestedTasks.value.splice(idx, 1)
+    extractedFields.value[idx] = {
+      ...extractedFields.value[idx],
+      confirmedValue: metaEditValue.value,
+      confirmStatus: 'CONFIRMED',
+    }
   }
-  showMessage('已忽略该推荐', 'info')
+  editingMeta.value = null
+  showMessage('已保存修改', 'success')
 }
 
-const existingDocForRecommend = computed<Document | null>(() => {
-  return mockDocuments.find(d => d.id === 'd1') || null
-})
-
-const hasUnprocessedDuplicate = computed(() => {
-  return parseQueueList.value.some(item => item.status === '疑似重复')
-})
-
-const recPageSize = 3
-const recCurrentPage = ref(1)
-
-const allRecommendedTasks = computed<SuggestedTask[]>(() => {
-  const seen = new Set<string>()
-  const unique: SuggestedTask[] = []
-  for (const task of suggestedTasks.value) {
-    if (seen.has(task.id)) continue
-    seen.add(task.id)
-    unique.push(task)
-  }
-  return unique
-})
-
-const recTotalPages = computed(() => Math.max(1, Math.ceil(allRecommendedTasks.value.length / recPageSize)))
-
-const recommendedTasks = computed<SuggestedTask[]>(() => {
-  const start = (recCurrentPage.value - 1) * recPageSize
-  return allRecommendedTasks.value.slice(start, start + recPageSize)
-})
-
-function goToRecPage(page: number) {
-  if (page < 1 || page > recTotalPages.value) return
-  recCurrentPage.value = page
+function cancelEditMeta() {
+  editingMeta.value = null
+  metaEditValue.value = ''
 }
 </script>
 
 <template>
-  <div class="workspace-smart-upload ws-page">
+  <div class="ws-smart-upload ws-page">
+    <input
+      ref="fileInputRef"
+      class="hidden-file-input"
+      type="file"
+      multiple
+      accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.zip,.rar"
+      @change="handleFileChange"
+    />
+
+    <!-- Page message -->
     <div v-if="pageMessage" class="ws-page-message" :class="pageMessageType">{{ pageMessage }}</div>
 
-    <div class="main-content">
-      <div class="left-section">
-        <div class="upload-section ws-panel">
-          <input
-            ref="fileInputRef"
-            class="hidden-file-input"
-            type="file"
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.zip,.rar"
-            @change="handleFileChange"
-          />
-          <div class="ws-panel-header">
-            <div class="ws-panel-title">上传资料</div>
-          </div>
+    <!-- Top flow bar -->
+    <div class="flow-bar">
+      <div
+        v-for="(step, i) in FLOW_STEPS"
+        :key="step.key"
+        class="flow-step"
+        :class="getFlowStepClass(i)"
+      >
+        <span class="flow-step-num">{{ i + 1 }}</span>
+        <span class="flow-step-label">{{ step.label }}</span>
+        <CheckCircle v-if="i < currentFlowStep" :size="14" class="flow-step-check" />
+      </div>
+    </div>
 
-          <div class="upload-area" @click="handleSelectFile">
-            <div class="upload-icon">
-              <Upload :size="20" />
-            </div>
-            <div class="upload-text">将文件拖拽到此处，或选择文件上传</div>
-          </div>
+    <!-- ─── IDLE: Large upload zone ─── -->
+    <div v-if="workbenchState === 'idle'" class="idle-zone ws-panel" @click="handleSelectFile" @drop="handleDrop" @dragover="handleDragOver">
+      <div class="idle-upload-inner">
+        <div class="idle-upload-icon">
+          <Upload :size="48" />
+        </div>
+        <div class="idle-upload-title">将文件拖拽到此处，或点击选择文件上传</div>
+        <div class="idle-upload-desc">
+          支持 PDF、Word、Excel、CSV、TXT、图片及压缩包。可多选文件作为一个资料包解析。
+        </div>
+        <button class="ws-btn ws-btn-primary idle-upload-btn" @click.stop="handleSelectFile">
+          <Upload :size="16" />
+          <span>选择本地文件</span>
+        </button>
+      </div>
+    </div>
 
-          <div class="upload-desc">
-            支持 PDF、Word、Excel、CSV、TXT、图片及压缩包。演示建议：{{ SAMPLE_FILE_NAME }}
-          </div>
+    <!-- ─── UPLOADING: Progress ─── -->
+    <div v-else-if="workbenchState === 'uploading'" class="progress-zone ws-panel">
+      <div class="progress-header">
+        <Loader2 :size="20" class="spin-icon" />
+        <span class="progress-title">正在上传文件</span>
+      </div>
+      <div class="progress-file-list">
+        <div v-for="(file, i) in uploadedFiles" :key="i" class="progress-file-item">
+          <component :is="getFileIcon(file.name)" :size="16" class="file-icon" />
+          <span class="file-name-text">{{ file.name }}</span>
+          <span class="file-size-text">{{ formatFileSize(file.size) }}</span>
+          <CheckCircle v-if="file.fileId" :size="16" class="file-done-icon" />
+        </div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill upload" :style="{ width: `${uploadProgress}%` }"></div>
+        </div>
+        <div class="progress-bar-info">
+          <span>{{ uploadProgress }}%</span>
+          <span v-if="uploadTotal > 0">{{ formatFileSize(uploadLoaded) }} / {{ formatFileSize(uploadTotal) }}</span>
+        </div>
+      </div>
+    </div>
 
-          <div class="upload-buttons">
-            <button class="ws-btn ws-btn-primary" @click="handleSelectFile">
-              <Upload :size="14" />
-              <span>选择本地文件</span>
-            </button>
-            <button class="ws-btn ws-btn-secondary" @click="handleDownloadSample">
-              <FileSpreadsheet :size="14" />
-              <span>下载样例文件</span>
-            </button>
-            <button class="ws-btn ws-btn-secondary" @click="handleBatchImport">
-              <FolderOpen :size="14" />
-              <span>批量导入</span>
-            </button>
-            <button class="ws-btn ws-btn-secondary" @click="handleSelectFromCenter">
-              <Link2 :size="14" />
-              <span>从资料中心选择</span>
+    <!-- ─── PARSING: Progress ─── -->
+    <div v-else-if="workbenchState === 'parsing'" class="progress-zone ws-panel">
+      <div class="progress-header">
+        <Loader2 :size="20" class="spin-icon" />
+        <span class="progress-title">AI解析中</span>
+      </div>
+      <div class="parse-stage-list">
+        <div
+          v-for="(stage, i) in PARSE_STAGES"
+          :key="stage.key"
+          class="parse-stage-item"
+          :class="{
+            done: parseProgress > stage.progress || (i === PARSE_STAGES.length - 1 && parseProgress === 100),
+            active: parseProgress === stage.progress || (parseProgress < stage.progress && (i === 0 || parseProgress >= PARSE_STAGES[i - 1].progress)),
+          }"
+        >
+          <div class="parse-stage-dot"></div>
+          <span class="parse-stage-label">{{ stage.label }}</span>
+          <span class="parse-stage-pct">{{ stage.progress }}%</span>
+        </div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill parse" :style="{ width: `${parseProgress}%` }"></div>
+        </div>
+        <div class="progress-bar-info">
+          <span>流程进度 {{ parseProgress }}%</span>
+          <span>{{ parseStageLabel }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── READY: Dual column ─── -->
+    <div v-else-if="workbenchState === 'ready'" class="ready-zone">
+      <!-- Left: Source preview (~55%) -->
+      <div class="source-preview-panel ws-panel">
+        <div class="ws-panel-header">
+          <div class="ws-panel-title">
+            <FileText :size="16" class="ws-panel-title-icon" />
+            <span>原文预览</span>
+          </div>
+          <div class="source-file-tabs">
+            <button
+              v-for="(file, i) in uploadedFiles"
+              :key="i"
+              class="source-file-tab"
+              :class="{ active: activeFileIndex === i }"
+              @click="selectFile(i)"
+            >
+              <component :is="getFileIcon(file.name)" :size="12" />
+              <span>{{ file.name.length > 16 ? file.name.slice(0, 14) + '…' : file.name }}</span>
             </button>
           </div>
         </div>
 
-        <div class="parse-queue-section ws-panel">
-          <div class="ws-panel-header">
-            <div class="ws-panel-title">解析队列</div>
-            <div class="queue-actions">
-              <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleBatchRetry" :disabled="selectedQueueItems.length === 0">
-                <RefreshCw :size="14" />
-                <span>批量重解析</span>
-              </button>
-              <button class="ws-btn ws-btn-danger ws-btn-sm" @click="handleBatchClearFailed" :disabled="selectedQueueItems.length === 0">
-                <Trash2 :size="14" />
-                <span>清除失败</span>
-              </button>
-            </div>
+        <div class="source-toolbar">
+          <div class="source-page-nav">
+            <button class="ws-btn ws-btn-secondary ws-btn-sm" :disabled="sourcePage <= 1" @click="goToSourcePage(sourcePage - 1)">
+              <ChevronLeft :size="14" />
+            </button>
+            <span class="source-page-text">{{ sourcePage }} / {{ sourceTotalPages }}</span>
+            <button class="ws-btn ws-btn-secondary ws-btn-sm" :disabled="sourcePage >= sourceTotalPages" @click="goToSourcePage(sourcePage + 1)">
+              <ChevronRight :size="14" />
+            </button>
+          </div>
+          <div class="ws-search-box source-search">
+            <Search :size="14" />
+            <input v-model="sourceSearchKeyword" type="text" placeholder="搜索原文..." />
+          </div>
+        </div>
+
+        <div class="source-content-area">
+          <div v-if="activeFile" class="source-file-info-bar">
+            <component :is="getFileIcon(activeFile.name)" :size="16" class="file-icon" />
+            <span class="source-file-name">{{ activeFile.name }}</span>
+            <span class="source-file-size">{{ formatFileSize(activeFile.size) }}</span>
           </div>
 
-          <div class="queue-filters">
-            <div class="status-tabs">
-              <span
-                v-for="status in statusOptions"
-                :key="status"
-                class="status-tab"
-                :class="{ active: statusFilter === status }"
-                @click="statusFilter = status; currentPage = 1"
-              >{{ status }}</span>
+          <div class="source-text-area">
+            <div v-if="sourceFieldsForPage.length === 0" class="source-empty">
+              暂无可展示的原文内容
             </div>
-            <div class="ws-search-box queue-search">
-              <Search :size="14" />
-              <input v-model="searchKeyword" type="text" placeholder="搜索文件名..." @input="currentPage = 1" />
-            </div>
-          </div>
-
-          <div class="ws-table-container queue-table">
-            <div class="ws-table-scroll no-scroll">
-              <table class="ws-table">
-                <colgroup>
-                  <col class="col-checkbox" />
-                  <col class="col-file" />
-                  <col class="col-size" />
-                  <col class="col-progress" />
-                  <col class="col-status" />
-                  <col class="col-time" />
-                  <col class="col-action" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th class="col-checkbox">
-                      <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
-                    </th>
-                    <th class="col-file">文件名</th>
-                    <th class="col-size">大小</th>
-                    <th class="col-progress">进度</th>
-                    <th class="col-status">状态</th>
-                    <th class="col-time">上传时间</th>
-                    <th class="col-action">下一步</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="item in paginatedQueue" :key="item.id" :class="{ selected: selectedQueueItems.includes(item.id) }">
-                    <td class="col-checkbox">
-                      <input type="checkbox" :checked="selectedQueueItems.includes(item.id)" @change="toggleQueueItemSelect(item.id)" />
-                    </td>
-                    <td class="col-file">
-                      <component :is="getFileIcon(item.fileName)" :size="14" class="file-icon" />
-                      <span class="file-name-text">{{ item.fileName }}</span>
-                    </td>
-                    <td class="col-size">{{ item.size }}</td>
-                    <td class="col-progress">
-                      <div class="ws-progress">
-                        <div class="ws-progress-bar">
-                          <div class="ws-progress-fill" :style="{ width: `${item.progress}%` }"></div>
-                        </div>
-                        <span class="ws-progress-text">{{ item.progress }}%</span>
-                      </div>
-                    </td>
-                    <td class="col-status">
-                      <span class="status-tag" :style="{ background: `${getStatusColor(item.status)}20`, color: getStatusColor(item.status) }">
-                        {{ item.status }}
-                      </span>
-                    </td>
-                    <td class="col-time">{{ item.uploadTime || '-' }}</td>
-                    <td class="col-action">
-                      <button class="ws-btn ws-btn-action ws-btn-sm" @click.stop="handleViewResult(item)">
-                        {{ getQueueButtonAction(item.status) }}
-                      </button>
-                      <button v-if="item.status === '解析失败'" class="ws-btn ws-btn-secondary ws-btn-sm" @click.stop="handleRetryParse(item)">
-                        <RefreshCw :size="12" />
-                      </button>
-                      <button v-if="item.status === '解析失败'" class="ws-btn ws-btn-danger ws-btn-sm" @click.stop="handleClearFailed(item)">
-                        <Trash2 :size="12" />
-                      </button>
-                    </td>
-                  </tr>
-                  <tr v-if="paginatedQueue.length === 0">
-                    <td colspan="7" class="empty-row">暂无数据</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="ws-pagination-bar">
-            <div class="ws-pagination-info">共 <span class="highlight">{{ filteredQueue.length }}</span> 项，每页 {{ pageSize }} 项</div>
-            <div class="ws-pagination-controls">
-              <button class="ws-page-btn" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
-                <ChevronLeft :size="14" />
-              </button>
-              <button
-                v-for="p in getPageNumbers()"
-                :key="p"
-                class="ws-page-btn"
-                :class="{ active: currentPage === p }"
-                @click="goToPage(p)"
-              >
-                {{ p }}
-              </button>
-              <button class="ws-page-btn" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
-                <ChevronRight :size="14" />
-              </button>
+            <div
+              v-for="field in sourceFieldsForPage"
+              :key="field.id"
+              class="source-field-block"
+              :class="{ highlighted: selectedFieldKey === field.fieldKey }"
+              @click="selectedFieldKey = field.fieldKey"
+            >
+              <div class="source-field-label">
+                <span class="source-field-name">{{ field.fieldName }}</span>
+                <button class="source-locate-btn" @click.stop="handleViewSource(field)">
+                  <Eye :size="12" />
+                  <span>定位</span>
+                </button>
+              </div>
+              <div class="source-field-value">{{ field.fieldValue || '—' }}</div>
+              <div v-if="field.confirmedValue && field.confirmedValue !== field.fieldValue" class="source-field-confirmed">
+                人工确认值：{{ field.confirmedValue }}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="right-section">
-        <div class="ai-summary-card ws-panel">
-          <div class="ws-panel-header">
-            <div class="ws-panel-title">
-              <Sparkles :size="16" class="ws-panel-title-icon" />
-              <span>AI解析摘要</span>
-            </div>
-            <div class="summary-header-actions">
-              <span
-                v-if="hasRealParse"
-                class="parse-source-badge"
-                :title="currentJob?.summary || ''"
-              >
-                {{ currentJob?.parseSource === 'content' ? '已识别' : '规则识别' }}
-              </span>
-              <button class="detail-btn" @click="handleViewParseDetail">查看详情</button>
-            </div>
+      <!-- Right: Structured results (~45%) -->
+      <div class="result-panel ws-panel">
+        <div class="ws-panel-header">
+          <div class="ws-panel-title">
+            <Sparkles :size="16" class="ws-panel-title-icon" />
+            <span>解析结果确认单</span>
           </div>
-          <div v-if="!hasRealParse" class="parse-empty-hint">
-            上传样例 CSV 后，此处展示从文件内容识别的字段与置信度。
-          </div>
-          <div class="ai-fields">
-            <div class="ai-field">
-              <span class="field-label">资料类型</span>
-              <div v-if="editingField === 'documentType'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('documentType')" @blur="saveEditField('documentType')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('documentType', aiParseResult.documentType)">
-                <span class="field-value">{{ aiParseResult.documentType }}</span>
-                <span class="edit-hint">双击编辑</span>
+          <span v-if="currentJob" class="parse-engine-badge">
+            {{ currentJob.parseSource === 'content' ? '已识别' : '规则识别' }}
+          </span>
+        </div>
+
+        <!-- Right tabs -->
+        <div class="right-tabs">
+          <button
+            v-for="tab in [
+              { key: 'summary', label: '摘要与归属' },
+              { key: 'data', label: `关键数据${extractedFields.length > 0 ? `(${extractedFields.length})` : ''}` },
+              { key: 'anomaly', label: `异常与关联${anomalies.length + matchCandidates.length > 0 ? `(${anomalies.length + matchCandidates.length})` : ''}` },
+            ]"
+            :key="tab.key"
+            class="right-tab-btn"
+            :class="{ active: rightTab === tab.key }"
+            @click="rightTab = tab.key as RightTab"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <!-- Tab content -->
+        <div class="right-tab-content">
+          <!-- Tab 1: Summary & Classification -->
+          <div v-if="rightTab === 'summary'" class="tab-summary">
+            <div class="summary-text-block">
+              <div class="summary-label">资料摘要</div>
+              <div class="summary-text">{{ summaryText }}</div>
+            </div>
+
+            <div class="meta-section">
+              <div class="meta-section-title">关键元数据（可修改）</div>
+              <div class="meta-grid">
+                <div class="meta-item" v-for="key in ['documentType', 'period', 'responsibleUnit', 'projectSection', 'engineeringObject']" :key="key">
+                  <span class="meta-label">{{ { documentType: '资料类型', period: '所属周期', responsibleUnit: '责任单位', projectSection: '所属标段', engineeringObject: '工程对象' }[key] }}</span>
+                  <div v-if="editingMeta === key" class="meta-edit">
+                    <input v-model="metaEditValue" class="meta-edit-input" @keyup.enter="saveEditMeta(key)" @blur="saveEditMeta(key)" />
+                  </div>
+                  <div v-else class="meta-value-wrap" @dblclick="startEditMeta(key, metadataFields[key])">
+                    <span class="meta-value">{{ metadataFields[key] }}</span>
+                    <span class="meta-edit-hint">双击编辑</span>
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="ai-field">
-              <span class="field-label">资料周期</span>
-              <div v-if="editingField === 'cycle'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('cycle')" @blur="saveEditField('cycle')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('cycle', aiParseResult.cycle)">
-                <span class="field-value">{{ aiParseResult.cycle }}</span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">ESG模块</span>
-              <span class="field-value" :style="{ color: getModuleColor(aiParseResult.module) }">
-                {{ aiParseResult.module }} · {{ aiParseResult.moduleName }}
-              </span>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">责任单位</span>
-              <div v-if="editingField === 'responsibilityUnit'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('responsibilityUnit')" @blur="saveEditField('responsibilityUnit')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('responsibilityUnit', aiParseResult.responsibilityUnit)">
-                <span class="field-value">{{ aiParseResult.responsibilityUnit }}</span>
-                <span class="edit-hint">双击编辑</span>
+
+            <div class="meta-section">
+              <div class="meta-section-title">ESG归属分类</div>
+              <div class="classification-options">
+                <button
+                  v-for="opt in CLASSIFICATION_OPTIONS"
+                  :key="opt.value"
+                  class="classification-btn"
+                  :class="{ active: esgClassification === opt.value }"
+                  :style="esgClassification === opt.value ? { borderColor: opt.color, color: opt.color, background: opt.color + '15' } : {}"
+                  @click="esgClassification = opt.value"
+                >
+                  {{ opt.label }}
+                </button>
               </div>
             </div>
-            <div class="ai-field">
-              <span class="field-label">项目/标段</span>
-              <div v-if="editingField === 'projectSection'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('projectSection')" @blur="saveEditField('projectSection')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('projectSection', aiParseResult.projectSection || '-')">
-                <span class="field-value">{{ aiParseResult.projectSection || '-' }}</span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">工程对象/事项</span>
-              <div v-if="editingField === 'engineeringObject'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('engineeringObject')" @blur="saveEditField('engineeringObject')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('engineeringObject', aiParseResult.engineeringObject || '-')">
-                <span class="field-value">{{ aiParseResult.engineeringObject || '-' }}</span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">有效期</span>
-              <div v-if="editingField === 'validPeriod'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('validPeriod')" @blur="saveEditField('validPeriod')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('validPeriod', aiParseResult.validPeriod)">
-                <span class="field-value">{{ aiParseResult.validPeriod }}</span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">建议关联任务</span>
-              <div v-if="editingField === 'suggestedTask'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('suggestedTask')" @blur="saveEditField('suggestedTask')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('suggestedTask', aiParseResult.suggestedTask)">
-                <span class="field-value link-like">{{ aiParseResult.suggestedTask }}</span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field">
-              <span class="field-label">建议关联指标</span>
-              <div v-if="editingField === 'suggestedKpiName'" class="field-edit">
-                <input v-model="editFieldValue" class="edit-input" @keyup.enter="saveEditField('suggestedKpiName')" @blur="saveEditField('suggestedKpiName')" />
-              </div>
-              <div v-else class="field-value-wrap" @dblclick="startEditField('suggestedKpiName', aiParseResult.suggestedKpiCode + ' ' + aiParseResult.suggestedKpiName)">
-                <span class="field-value kpi-value">
-                  <span class="kpi-code">{{ aiParseResult.suggestedKpiCode }}</span>
-                  {{ aiParseResult.suggestedKpiName }}
-                </span>
-                <span class="edit-hint">双击编辑</span>
-              </div>
-            </div>
-            <div class="ai-field confidence-field">
-              <span class="field-label">解析置信度</span>
+
+            <div class="meta-section">
+              <div class="meta-section-title">解析置信度</div>
               <div class="confidence-wrap">
                 <div class="confidence-bar">
-                  <div class="confidence-fill" :style="{ width: `${aiParseResult.confidence}%` }"></div>
+                  <div class="confidence-fill" :style="{ width: `${currentJob?.confidence ? Math.round(Number(currentJob.confidence)) : 0}%` }"></div>
                 </div>
-                <span class="confidence-text">{{ aiParseResult.confidence }}%</span>
+                <span class="confidence-text">{{ currentJob?.confidence ? Math.round(Number(currentJob.confidence)) : 0 }}%</span>
               </div>
             </div>
           </div>
 
-          <div v-if="highlightFields.length" class="extracted-metrics">
-            <div class="extracted-metrics-title">自文件识别的业务字段</div>
-            <div
-              v-for="field in highlightFields"
-              :key="field.id"
-              class="extracted-metric-row"
-            >
-              <span class="metric-name">{{ field.fieldName }}</span>
-              <span class="metric-value">{{ field.fieldValue }}</span>
-              <span class="metric-conf">{{ Math.round(Number(field.confidence) || 0) }}%</span>
-            </div>
-          </div>
-
-          <div v-if="aiParseResult.duplicateCount > 0" class="duplicate-warning" @click="showDuplicateModal = true">
-            <AlertTriangle :size="16" class="warning-icon" />
-            <span class="warning-text">疑似重复</span>
-            <span class="warning-count">{{ aiParseResult.duplicateCount }}份</span>
-            <span class="warning-btn-text">点击处理 →</span>
-          </div>
-        </div>
-
-        <div class="ai-recommend-card ws-panel">
-          <div class="ws-panel-header">
-            <div class="ws-panel-title">
-              <Layers :size="16" class="ws-panel-title-icon" />
-              <span>AI智能推荐</span>
-            </div>
-            <span class="rec-count">共 {{ allRecommendedTasks.length }} 条</span>
-          </div>
-          <div class="recommend-list">
-            <div v-if="recommendedTasks.length === 0" class="parse-empty-hint">
-              上传并解析后，此处显示匹配到的上传任务候选。
-            </div>
-            <div v-for="task in recommendedTasks" :key="task.id" class="recommend-item">
-              <div class="recommend-file-info">
-                <div class="recommend-file-name">
-                  <FileText :size="16" class="recommend-file-icon" />
-                  <span :title="task.documentName">{{ task.documentName }}</span>
-                </div>
-                <div class="recommend-meta">
-                  <span class="match-badge" :style="{ color: getModuleColor(task.module), borderColor: getModuleColor(task.module) + '50' }">
-                    匹配度 {{ task.matchRate }}%
+          <!-- Tab 2: Key Data -->
+          <div v-else-if="rightTab === 'data'" class="tab-data">
+            <div v-if="extractedFields.length === 0" class="tab-empty">暂无识别到的数据字段</div>
+            <div v-else class="field-list">
+              <div
+                v-for="field in extractedFields"
+                :key="field.id"
+                class="field-card"
+                :class="{ selected: selectedFieldKey === field.fieldKey }"
+                @click="selectedFieldKey = field.fieldKey"
+              >
+                <div class="field-card-header">
+                  <span class="field-card-name">{{ field.fieldName }}</span>
+                  <span
+                    class="field-status-tag"
+                    :style="{
+                      color: getFieldStatusInfo(getFieldStatus(field)).color,
+                      background: getFieldStatusInfo(getFieldStatus(field)).bg,
+                      borderColor: getFieldStatusInfo(getFieldStatus(field)).color + '40',
+                    }"
+                  >
+                    {{ getFieldStatusInfo(getFieldStatus(field)).label }}
                   </span>
-                  <span class="reuse-count">已关联 {{ task.reuseCount }} 个任务</span>
                 </div>
-                <div class="recommend-basis">
-                  <span class="basis-label">推荐依据：</span>
-                  <span class="basis-text" :title="task.matchBasis">{{ task.matchBasis || '内容关键词匹配' }}</span>
+
+                <div v-if="editingFieldKey === field.fieldKey" class="field-edit-area">
+                  <div class="field-edit-row">
+                    <span class="field-edit-label">AI值：</span>
+                    <span class="field-edit-ai-value">{{ field.fieldValue }}</span>
+                  </div>
+                  <input v-model="editFieldValue" class="field-edit-input" placeholder="输入确认值" />
+                  <textarea
+                    v-model="editReason"
+                    class="field-edit-reason"
+                    placeholder="修改原因（冲突字段必填）"
+                    rows="2"
+                  ></textarea>
+                  <div class="field-edit-actions">
+                    <button class="ws-btn ws-btn-primary ws-btn-sm" @click.stop="saveEditField">保存</button>
+                    <button class="ws-btn ws-btn-secondary ws-btn-sm" @click.stop="cancelEditField">取消</button>
+                  </div>
                 </div>
-              </div>
-              <div class="recommend-actions">
-                <button class="ws-btn ws-btn-primary ws-btn-sm" @click="handleReuseAndRecommend(task)">复用并关联</button>
-                <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleViewFile(task.documentName)">
-                  <Eye :size="12" />
-                  <span>查看</span>
-                </button>
-                <button class="ws-btn ws-btn-secondary ws-btn-sm" @click="handleIgnoreRecommend(task)">
-                  <XCircle :size="12" />
-                  <span>忽略</span>
-                </button>
+
+                <div v-else class="field-value-display">
+                  <div class="field-value-row">
+                    <span class="field-value-label">AI值：</span>
+                    <span class="field-value-text">{{ field.fieldValue || '—' }}</span>
+                  </div>
+                  <div v-if="field.confirmedValue" class="field-value-row confirmed">
+                    <span class="field-value-label">确认值：</span>
+                    <span class="field-value-text">{{ field.confirmedValue }}</span>
+                  </div>
+                  <div class="field-actions">
+                    <button class="field-action-btn" @click.stop="startEditField(field)">
+                      <RefreshCw :size="12" />
+                      <span>修改</span>
+                    </button>
+                    <button class="field-action-btn" @click.stop="handleViewSource(field)">
+                      <Eye :size="12" />
+                      <span>查看来源</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field-confidence">
+                  <span>置信度 {{ Math.round(Number(field.confidence) || 0) }}%</span>
+                </div>
               </div>
             </div>
           </div>
-          <div v-if="allRecommendedTasks.length > recPageSize" class="rec-pagination">
-            <span class="rec-pagination-info">共 {{ allRecommendedTasks.length }} 条</span>
-            <div class="rec-pagination-controls">
-              <button class="rec-page-btn" :disabled="recCurrentPage === 1" @click="goToRecPage(recCurrentPage - 1)">上一页</button>
-              <button
-                v-for="p in recTotalPages"
-                :key="p"
-                class="rec-page-btn"
-                :class="{ active: recCurrentPage === p }"
-                @click="goToRecPage(p)"
-              >{{ p }}</button>
-              <button class="rec-page-btn" :disabled="recCurrentPage === recTotalPages" @click="goToRecPage(recCurrentPage + 1)">下一页</button>
+
+          <!-- Tab 3: Anomaly & Association -->
+          <div v-else-if="rightTab === 'anomaly'" class="tab-anomaly">
+            <!-- Anomalies -->
+            <div class="anomaly-section">
+              <div class="anomaly-section-title">
+                <FileWarning :size="14" />
+                <span>异常记录</span>
+                <span class="anomaly-count">{{ anomalies.length }}</span>
+              </div>
+              <div v-if="anomalies.length === 0" class="anomaly-empty">暂无异常</div>
+              <div v-else class="anomaly-list">
+                <div
+                  v-for="(anomaly, i) in anomalies"
+                  :key="i"
+                  class="anomaly-item"
+                  :class="{ blocking: anomaly.severity === 'blocking' }"
+                >
+                  <div class="anomaly-item-header">
+                    <AlertTriangle :size="14" class="anomaly-icon" />
+                    <span class="anomaly-type">{{ anomaly.type }}</span>
+                    <span class="anomaly-severity" :class="anomaly.severity">
+                      {{ anomaly.severity === 'blocking' ? '阻断' : '提醒' }}
+                    </span>
+                  </div>
+                  <div class="anomaly-message">{{ anomaly.message }}</div>
+                  <button v-if="anomaly.fieldKey" class="anomaly-action" @click="rightTab = 'data'; selectedFieldKey = anomaly.fieldKey">
+                    去处理 →
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Business Candidates -->
+            <div class="anomaly-section">
+              <div class="anomaly-section-title">
+                <Link2 :size="14" />
+                <span>业务关联推荐</span>
+                <span class="anomaly-count">{{ matchCandidates.length }}</span>
+              </div>
+
+              <div v-if="matchCandidates.length === 0" class="no-candidate-hint">
+                暂未发现可关联的业务事项，可先确认入库，后续补充关联。
+              </div>
+
+              <div v-else class="candidate-list">
+                <div
+                  v-for="candidate in matchCandidates"
+                  :key="candidate.candidateId"
+                  class="candidate-item"
+                  :class="{ selected: selectedCandidateIds.includes(candidate.candidateId) }"
+                >
+                  <label class="candidate-checkbox" @click.stop="toggleCandidate(candidate.candidateId)">
+                    <input
+                      type="checkbox"
+                      :checked="selectedCandidateIds.includes(candidate.candidateId)"
+                      @change="toggleCandidate(candidate.candidateId)"
+                    />
+                    <span class="checkbox-custom"></span>
+                  </label>
+                  <div class="candidate-content">
+                    <div class="candidate-header">
+                      <span class="candidate-name">{{ candidate.taskName }}</span>
+                      <span class="candidate-module" :style="{ color: getModuleColor(candidate.module) }">
+                        {{ candidate.module }} · {{ getModuleLabel(candidate.module) }}
+                      </span>
+                    </div>
+                    <div class="candidate-meta">
+                      <span class="candidate-score" :style="{ color: candidate.matchScore >= 90 ? '#69e36f' : '#ffb347' }">
+                        匹配度 {{ candidate.matchScore }}%
+                      </span>
+                      <span class="candidate-reason">{{ candidate.matchReason || '内容关键词匹配' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Archive metadata -->
+            <div class="anomaly-section">
+              <div class="anomaly-section-title">
+                <Archive :size="14" />
+                <span>资料归档</span>
+              </div>
+              <div class="archive-grid">
+                <div class="archive-item">
+                  <span class="archive-label">资料类型</span>
+                  <span class="archive-value">{{ metadataFields.documentType }}</span>
+                </div>
+                <div class="archive-item">
+                  <span class="archive-label">所属周期</span>
+                  <span class="archive-value">{{ metadataFields.period }}</span>
+                </div>
+                <div class="archive-item">
+                  <span class="archive-label">责任单位</span>
+                  <span class="archive-value">{{ metadataFields.responsibleUnit }}</span>
+                </div>
+                <div class="archive-item">
+                  <span class="archive-label">ESG归属</span>
+                  <span class="archive-value" :style="{ color: getModuleColor(esgClassification) }">
+                    {{ esgClassification }} · {{ getModuleLabel(esgClassification) }}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="ws-bottom-actions">
-      <button class="ws-btn ws-btn-secondary" @click="handleCancel">取消</button>
-      <button class="ws-btn ws-btn-view" @click="handleSaveToCenter">仅保存到资料中心</button>
-      <button class="ws-btn ws-btn-primary" :disabled="hasUnprocessedDuplicate" @click="handleConfirmAndLink">
-        确认入库并关联
-      </button>
-    </div>
-
-    <div v-if="showDuplicateModal" class="modal-overlay" @click.self="showDuplicateModal = false">
-      <div class="modal duplicate-modal">
-        <div class="modal-header">
-          <span class="modal-title">
-            <AlertTriangle :size="18" class="modal-title-icon" />
-            疑似重复资料
-          </span>
-          <button class="modal-close" @click="showDuplicateModal = false">×</button>
+    <!-- ─── DONE: Summary ─── -->
+    <div v-else-if="workbenchState === 'done'" class="done-zone ws-panel">
+      <div class="done-inner">
+        <div class="done-icon">
+          <CheckCircle :size="48" />
         </div>
-        <div class="modal-body">
-          <div class="duplicate-compare">
-            <div class="compare-col">
-              <div class="compare-label new-label">
-                <Upload :size="14" />
-                <span>新上传文件</span>
-              </div>
-              <div class="compare-content">
-                <div class="compare-item">
-                  <span class="compare-key">文件名</span>
-                  <span class="compare-val">{{ currentDuplicateFile?.fileName }}</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">文件哈希</span>
-                  <span class="compare-val hash">{{ currentDuplicateFile?.fileHash }}</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">文件大小</span>
-                  <span class="compare-val">{{ currentDuplicateFile?.fileSize }}</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">资料周期</span>
-                  <span class="compare-val">{{ currentDuplicateFile?.cycle }}</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">上传时间</span>
-                  <span class="compare-val">{{ currentDuplicateFile?.uploadTime }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="compare-vs">
-              <div class="vs-badge">
-                <span>相似度</span>
-                <strong>{{ currentDuplicateFile?.similarity }}%</strong>
-              </div>
-            </div>
-
-            <div class="compare-col">
-              <div class="compare-label existing-label">
-                <Copy :size="14" />
-                <span>已有文件</span>
-              </div>
-              <div class="compare-content">
-                <div class="compare-item">
-                  <span class="compare-key">文件名</span>
-                  <span class="compare-val">临时用地批复_扫描件.pdf</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">文件哈希</span>
-                  <span class="compare-val hash">SHA256: f6a1b2c3d4e5...</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">文件大小</span>
-                  <span class="compare-val">3.20MB</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">资料周期</span>
-                  <span class="compare-val">2026年度</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">上传时间</span>
-                  <span class="compare-val">2026-03-20 11:00</span>
-                </div>
-                <div class="compare-item">
-                  <span class="compare-key">已关联任务</span>
-                  <span class="compare-val task-list">临时用地合规资料</span>
-                </div>
-              </div>
-            </div>
+        <div class="done-title">入库成功</div>
+        <div class="done-summary">{{ doneSummary }}</div>
+        <div v-if="doneResult?.linkedTasks && doneResult.linkedTasks.length > 0" class="done-linked">
+          <div class="done-linked-title">关联结果</div>
+          <div v-for="task in doneResult.linkedTasks" :key="task.taskId" class="done-linked-item">
+            <CheckCircle :size="14" class="done-linked-icon" />
+            <span>{{ task.taskName }}</span>
+            <span v-if="task.progress" class="done-linked-progress">
+              完整度 {{ task.progress.completed }}/{{ task.progress.total }}
+            </span>
           </div>
         </div>
-        <div class="modal-footer">
-          <button class="modal-btn secondary" @click="handleCancelUpload">取消上传</button>
-          <button class="modal-btn" @click="handleConfirmDifferent">确认为不同资料</button>
-          <button class="modal-btn" @click="handleUploadAsNewVersion">作为新版本上传</button>
-          <button class="modal-btn primary" @click="handleReuseExisting">复用已有资料</button>
+        <button class="ws-btn ws-btn-primary done-continue-btn" @click="handleContinue">
+          <Upload :size="16" />
+          <span>继续上传</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ─── FAILED: Error ─── -->
+    <div v-else-if="workbenchState === 'failed'" class="failed-zone ws-panel">
+      <div class="failed-inner">
+        <div class="failed-icon">
+          <XCircle :size="48" />
         </div>
+        <div class="failed-title">处理失败</div>
+        <div class="failed-message">{{ pageMessage || '未知错误' }}</div>
+        <button class="ws-btn ws-btn-primary failed-retry-btn" @click="handleRetry">
+          <RefreshCw :size="16" />
+          <span>重新选择文件</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ─── Bottom action bar (ready state only) ─── -->
+    <div v-if="workbenchState === 'ready'" class="ws-bottom-actions smart-upload-actions">
+      <div class="action-left">
+        <button class="ws-btn ws-btn-secondary" @click="handleReParse">
+          <RefreshCw :size="14" />
+          <span>重新解析</span>
+        </button>
+        <button class="ws-btn ws-btn-view" @click="handleSaveDraft">
+          <Archive :size="14" />
+          <span>暂存待确认</span>
+        </button>
+      </div>
+      <div class="action-right">
+        <label v-if="hasWarnings && !hasUnresolvedConflicts && !hasMissingRequired" class="ack-checkbox" @click="acknowledgedWarnings = !acknowledgedWarnings">
+          <input type="checkbox" v-model="acknowledgedWarnings" />
+          <span class="ack-text">我已核对上述提醒，确认采用当前结果</span>
+        </label>
+        <button class="ws-btn ws-btn-primary" :disabled="!canConfirm" @click="handleConfirm">
+          <CheckCircle :size="14" />
+          <span>{{ confirmButtonText }}</span>
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.workspace-smart-upload {
-  min-height: 0;
+/* ─── Flow bar ─── */
+.flow-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  padding: 0 4px;
 }
 
-.upload-buttons .ws-btn,
-.recommend-actions .ws-btn {
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: #5a7a9a;
+  position: relative;
   flex: 1;
 }
 
-.main-content {
+.flow-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 1px;
+  background: rgba(143, 169, 200, 0.2);
+}
+
+.flow-step-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
   display: flex;
-  gap: 10px;
-  flex: 1;
-  overflow: hidden;
-}
-
-.left-section {
-  width: 60%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.right-section {
-  width: 40%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  overflow: hidden;
-}
-
-.hidden-file-input {
-  display: none;
-}
-
-.upload-section {
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid rgba(143, 169, 200, 0.3);
+  color: #5a7a9a;
   flex-shrink: 0;
 }
 
-.upload-area {
-  border: 2px dashed rgba(105, 227, 111, 0.3);
-  border-radius: 8px;
-  padding: 10px 12px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.upload-area:hover {
-  border-color: #69e36f;
-  background: rgba(105, 227, 111, 0.05);
-}
-
-.upload-icon {
-  color: #69e36f;
-  margin-bottom: 4px;
-  display: flex;
-  justify-content: center;
-}
-
-.upload-text {
-  font-size: 13px;
-  color: #e8f3ff;
+.flow-step-label {
   font-weight: 500;
+  white-space: nowrap;
 }
 
-.upload-desc {
-  font-size: 11px;
-  color: #8fa9c8;
-  margin-top: 6px;
-  line-height: 1.4;
-  text-align: center;
+.flow-step-check {
+  color: #69e36f;
+  flex-shrink: 0;
 }
 
-.upload-buttons {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
+.flow-step.completed {
+  color: #69e36f;
 }
 
-.upload-btn {
+.flow-step.completed .flow-step-num {
+  background: rgba(105, 227, 111, 0.15);
+  border-color: rgba(105, 227, 111, 0.4);
+  color: #69e36f;
+}
+
+.flow-step.active {
+  color: #2f9cff;
+}
+
+.flow-step.active .flow-step-num {
+  background: rgba(47, 156, 255, 0.15);
+  border-color: rgba(47, 156, 255, 0.5);
+  color: #2f9cff;
+  box-shadow: 0 0 8px rgba(47, 156, 255, 0.3);
+}
+
+/* ─── IDLE ─── */
+.idle-zone {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+  border: 2px dashed rgba(105, 227, 111, 0.2);
+  transition: border-color 0.2s, background 0.2s;
+  min-height: 0;
+}
+
+.idle-zone:hover {
+  border-color: rgba(105, 227, 111, 0.5);
+  background: rgba(105, 227, 111, 0.03);
+}
+
+.idle-upload-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px;
+}
+
+.idle-upload-icon {
+  color: #69e36f;
+  opacity: 0.8;
+}
+
+.idle-upload-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e8f3ff;
+}
+
+.idle-upload-desc {
+  font-size: 13px;
+  color: #8fa9c8;
+  text-align: center;
+  line-height: 1.5;
+  max-width: 400px;
+}
+
+.idle-upload-btn {
+  margin-top: 8px;
+}
+
+/* ─── Progress zone ─── */
+.progress-zone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 40px;
+  min-height: 0;
+}
+
+.progress-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.spin-icon {
+  color: #2f9cff;
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.progress-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e8f3ff;
+}
+
+.progress-file-list {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
+  width: 100%;
+  max-width: 500px;
+}
+
+.progress-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.2);
   border-radius: 6px;
+  font-size: 13px;
+}
+
+.progress-file-item .file-icon {
+  color: #8fa9c8;
+  flex-shrink: 0;
+}
+
+.progress-file-item .file-name-text {
+  color: #e8f3ff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-file-item .file-size-text {
   color: #8fa9c8;
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.file-done-icon {
+  color: #69e36f;
+  flex-shrink: 0;
+}
+
+.progress-bar-wrap {
+  width: 100%;
+  max-width: 500px;
+}
+
+.progress-bar-track {
+  height: 8px;
+  background: rgba(47, 156, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar-fill.upload {
+  background: linear-gradient(90deg, #69e36f, #2f9cff);
+}
+
+.progress-bar-fill.parse {
+  background: linear-gradient(90deg, #2f9cff, #a66cff);
+}
+
+.progress-bar-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8fa9c8;
+}
+
+/* ─── Parse stages ─── */
+.parse-stage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 500px;
+}
+
+.parse-stage-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #5a7a9a;
+  border-radius: 6px;
+  transition: all 0.3s;
+}
+
+.parse-stage-item.done {
+  color: #69e36f;
+}
+
+.parse-stage-item.active {
+  color: #2f9cff;
+  background: rgba(47, 156, 255, 0.08);
+}
+
+.parse-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(143, 169, 200, 0.3);
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+.parse-stage-item.done .parse-stage-dot {
+  background: #69e36f;
+}
+
+.parse-stage-item.active .parse-stage-dot {
+  background: #2f9cff;
+  box-shadow: 0 0 8px rgba(47, 156, 255, 0.5);
+}
+
+.parse-stage-label {
+  flex: 1;
+}
+
+.parse-stage-pct {
+  font-size: 12px;
+  color: #5a7a9a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Ready zone ─── */
+.ready-zone {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  min-height: 0;
+}
+
+.source-preview-panel {
+  width: 55%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.result-panel {
+  width: 45%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ─── Source preview ─── */
+.source-file-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.source-file-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #8fa9c8;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid transparent;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.upload-btn:hover {
-  background: rgba(105, 227, 111, 0.15);
-  color: #69e36f;
+.source-file-tab.active {
+  color: #2f9cff;
+  border-color: rgba(47, 156, 255, 0.4);
+  background: rgba(47, 156, 255, 0.1);
 }
 
-.upload-btn.primary {
-  background: linear-gradient(135deg, #69e36f 0%, #2f9cff 100%);
-  border: none;
-  color: #031020;
-  font-weight: 600;
-}
-
-.parse-queue-section {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
+.source-file-tab span {
+  white-space: nowrap;
   overflow: hidden;
-  min-height: 0;
+  text-overflow: ellipsis;
 }
 
-.parse-queue-section > .ws-pagination-bar {
-  border: 1px solid rgba(47, 156, 255, 0.14);
-  border-radius: 0 0 8px 8px;
-}
-
-.queue-filters {
+.source-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
   flex-shrink: 0;
 }
 
-.status-tabs {
+.source-page-nav {
   display: flex;
-  gap: 2px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.status-tab {
-  padding: 2px 8px;
+.source-page-text {
   font-size: 12px;
   color: #8fa9c8;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  background: transparent;
-  border: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
 }
 
-.status-tab:hover {
-  color: #2f9cff;
+.source-search {
+  width: 160px;
 }
 
-.status-tab.active {
-  color: #2f9cff;
-  background: rgba(47, 156, 255, 0.1);
-  border-color: rgba(47, 156, 255, 0.3);
-}
-
-.queue-search {
-  margin-left: auto;
-  width: 180px;
-  flex-shrink: 0;
-}
-
-.queue-actions {
+.source-content-area {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
   display: flex;
-  gap: 8px;
+  flex-direction: column;
 }
 
-.queue-table {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  flex: 1;
-  min-height: 0;
-}
-
-.col-checkbox {
-  width: 40px;
-}
-
-.col-file {
-  width: auto;
-}
-
-.col-file .file-icon {
-  color: #8fa9c8;
-  flex-shrink: 0;
-  vertical-align: middle;
-  margin-right: 8px;
-}
-
-.file-name-text {
-  vertical-align: middle;
-}
-
-.col-size {
-  width: 80px;
-  color: #8fa9c8;
-  font-size: 12px;
-}
-
-.col-progress {
-  width: 140px;
-}
-
-.col-status {
-  width: 100px;
-}
-
-.col-time {
-  width: 176px;
-  color: #8fa9c8;
-  font-size: 12px;
-}
-
-.col-action {
-  width: 168px;
-}
-
-.col-action .ws-btn + .ws-btn {
-  margin-left: 4px;
-}
-
-.empty-row {
-  text-align: center;
-  color: #5a7a9a;
-  padding: 40px !important;
-  font-size: 12px;
-}
-
-.ai-summary-card {
-  flex-shrink: 0;
-}
-
-.ai-recommend-card {
-  flex: 1;
-  min-height: 0;
-}
-
-.detail-btn {
-  font-size: 12px;
-  color: #69e36f;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.summary-header-actions {
+.source-file-info-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
-.parse-source-badge {
+.source-file-info-bar .file-icon {
+  color: #8fa9c8;
+}
+
+.source-file-name {
+  font-size: 13px;
+  color: #e8f3ff;
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-file-size {
+  font-size: 12px;
+  color: #8fa9c8;
+  flex-shrink: 0;
+}
+
+.source-text-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.source-empty {
+  text-align: center;
+  color: #5a7a9a;
+  padding: 40px;
+  font-size: 13px;
+}
+
+.source-field-block {
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(47, 156, 255, 0.08);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.source-field-block:hover {
+  border-color: rgba(47, 156, 255, 0.2);
+}
+
+.source-field-block.highlighted {
+  border-color: rgba(255, 179, 71, 0.5);
+  background: rgba(255, 179, 71, 0.06);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.15);
+}
+
+.source-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.source-field-name {
+  font-size: 12px;
+  color: #8fa9c8;
+  font-weight: 500;
+}
+
+.source-locate-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #2f9cff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.source-locate-btn:hover {
+  background: rgba(47, 156, 255, 0.1);
+}
+
+.source-field-value {
+  font-size: 14px;
+  color: #e8f3ff;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.source-field-confirmed {
+  font-size: 12px;
+  color: #2f9cff;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(47, 156, 255, 0.1);
+}
+
+/* ─── Right tabs ─── */
+.right-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.right-tab-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #8fa9c8;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.right-tab-btn:hover {
+  color: #e8f3ff;
+}
+
+.right-tab-btn.active {
+  color: #2f9cff;
+  border-bottom-color: #2f9cff;
+}
+
+.right-tab-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.parse-engine-badge {
   font-size: 11px;
   color: #69e36f;
   border: 1px solid rgba(105, 227, 111, 0.35);
@@ -1348,95 +1717,88 @@ function goToRecPage(page: number) {
   white-space: nowrap;
 }
 
-.parse-empty-hint {
-  font-size: 12px;
-  color: #8fa9c8;
-  line-height: 1.5;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(47, 156, 255, 0.08);
-  border: 1px solid rgba(47, 156, 255, 0.15);
+/* ─── Tab: Summary ─── */
+.tab-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 0;
 }
 
-.extracted-metrics {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(143, 169, 200, 0.15);
+.summary-text-block {
+  padding: 10px 12px;
+  background: rgba(47, 156, 255, 0.08);
+  border: 1px solid rgba(47, 156, 255, 0.15);
+  border-radius: 6px;
+}
+
+.summary-label {
+  font-size: 12px;
+  color: #8fa9c8;
+  margin-bottom: 4px;
+}
+
+.summary-text {
+  font-size: 13px;
+  color: #e8f3ff;
+  line-height: 1.5;
+}
+
+.meta-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta-section-title {
+  font-size: 12px;
+  color: #8fa9c8;
+  font-weight: 600;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(47, 156, 255, 0.08);
+}
+
+.meta-grid {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.extracted-metrics-title {
-  font-size: 12px;
-  color: #8fa9c8;
-  margin-bottom: 2px;
-}
-
-.extracted-metric-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 8px;
+.meta-item {
+  display: flex;
   align-items: center;
-  font-size: 12px;
-}
-
-.metric-name {
-  color: #8fa9c8;
-}
-
-.metric-value {
-  color: #e8f3ff;
-  font-weight: 600;
-}
-
-.metric-conf {
-  color: #69e36f;
-  min-width: 36px;
-  text-align: right;
-}
-
-.ai-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ai-field {
-  display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
-.field-label {
+.meta-label {
   font-size: 12px;
   color: #8fa9c8;
   flex-shrink: 0;
-  width: 90px;
+  width: 80px;
 }
 
-.field-value {
+.meta-value-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.meta-value-wrap:hover .meta-edit-hint {
+  opacity: 1;
+}
+
+.meta-value {
   font-size: 13px;
   color: #e8f3ff;
   font-weight: 500;
   text-align: right;
 }
 
-.field-value-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  position: relative;
-}
-
-.field-value-wrap:hover .edit-hint {
-  opacity: 1;
-}
-
-.edit-hint {
+.meta-edit-hint {
   font-size: 10px;
   color: #5a7a9a;
   opacity: 0;
@@ -1444,17 +1806,17 @@ function goToRecPage(page: number) {
   flex-shrink: 0;
 }
 
-.field-edit {
+.meta-edit {
   flex: 1;
   display: flex;
   justify-content: flex-end;
 }
 
-.edit-input {
-  width: 180px;
+.meta-edit-input {
+  width: 160px;
   padding: 4px 8px;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(105, 227, 111, 0.3);
+  border: 1px solid rgba(47, 156, 255, 0.3);
   border-radius: 4px;
   color: #e8f3ff;
   font-size: 13px;
@@ -1462,46 +1824,40 @@ function goToRecPage(page: number) {
   text-align: right;
 }
 
-.edit-input:focus {
-  border-color: #69e36f;
+.meta-edit-input:focus {
+  border-color: #2f9cff;
 }
 
-.link-like {
-  color: #2f9cff;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.kpi-value {
+.classification-options {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
-.kpi-code {
-  padding: 2px 6px;
-  background: rgba(47, 156, 255, 0.15);
-  color: #2f9cff;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
+.classification-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #8fa9c8;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(143, 169, 200, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.confidence-field .field-value {
-  flex: 1;
+.classification-btn:hover {
+  border-color: rgba(143, 169, 200, 0.4);
+  color: #e8f3ff;
 }
 
 .confidence-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  justify-content: flex-end;
 }
 
 .confidence-bar {
-  width: 100px;
+  flex: 1;
   height: 6px;
   background: rgba(105, 227, 111, 0.1);
   border-radius: 3px;
@@ -1512,6 +1868,7 @@ function goToRecPage(page: number) {
   height: 100%;
   background: linear-gradient(90deg, #69e36f, #2f9cff);
   border-radius: 3px;
+  transition: width 0.3s;
 }
 
 .confidence-text {
@@ -1520,443 +1877,601 @@ function goToRecPage(page: number) {
   font-weight: 600;
   width: 40px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-.duplicate-warning {
+/* ─── Tab: Data ─── */
+.tab-data {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  background: rgba(255, 179, 71, 0.08);
-  border: 1px solid rgba(255, 179, 71, 0.3);
-  border-radius: 8px;
-  margin-top: 14px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tab-empty {
+  text-align: center;
+  color: #5a7a9a;
+  padding: 40px;
+  font-size: 13px;
+}
+
+.field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-card {
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(47, 156, 255, 0.08);
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.duplicate-warning:hover {
-  background: rgba(255, 179, 71, 0.12);
+.field-card:hover {
+  border-color: rgba(47, 156, 255, 0.2);
 }
 
-.warning-icon {
-  color: #ffb347;
-  flex-shrink: 0;
+.field-card.selected {
+  border-color: rgba(47, 156, 255, 0.4);
+  background: rgba(47, 156, 255, 0.05);
 }
 
-.warning-text {
-  font-size: 13px;
-  color: #ffb347;
-  font-weight: 600;
-}
-
-.warning-count {
-  font-size: 14px;
-  color: #ffb347;
-  font-weight: 700;
-}
-
-.warning-btn-text {
-  margin-left: auto;
-  font-size: 12px;
-  color: #ffb347;
-}
-
-.rec-count {
-  font-size: 12px;
-  color: #5a7a9a;
-}
-
-.recommend-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow-y: visible;
-  flex: 0 0 auto;
-}
-
-.recommend-item {
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(105, 227, 111, 0.08);
-  border-radius: 8px;
-  flex: 0 0 auto;
-}
-
-.basis-text {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.recommend-file-name {
+.field-card-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  margin-bottom: 6px;
+}
+
+.field-card-name {
   font-size: 13px;
   color: #e8f3ff;
   font-weight: 500;
-  margin-bottom: 8px;
-  overflow: hidden;
 }
 
-.recommend-file-name span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.recommend-file-icon {
-  color: #69e36f;
-  flex-shrink: 0;
-}
-
-.recommend-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.match-badge {
+.field-status-tag {
   padding: 2px 8px;
-  border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
   border: 1px solid;
-  background: rgba(105, 227, 111, 0.08);
-}
-
-.reuse-count {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.recommend-basis {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 10px;
-  line-height: 1.5;
-}
-
-.basis-label {
-  font-size: 11px;
-  color: #5a7a9a;
-  flex-shrink: 0;
-}
-
-.basis-text {
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.recommend-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.rec-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 6px 10px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
   border-radius: 4px;
-  color: #8fa9c8;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
+  white-space: nowrap;
 }
 
-.rec-btn:hover {
-  background: rgba(105, 227, 111, 0.15);
-  color: #69e36f;
-}
-
-.rec-btn.primary {
-  background: rgba(105, 227, 111, 0.2);
-  color: #69e36f;
-  font-weight: 600;
-  border: 1px solid #69e36f;
-}
-
-.rec-btn.ghost {
-  background: rgba(47, 156, 255, 0.08);
-  border-color: rgba(47, 156, 255, 0.25);
-  color: #7fb6ef;
-}
-
-.rec-btn.ghost:hover {
-  background: rgba(47, 156, 255, 0.16);
-  color: #9ec8f5;
-}
-
-.rec-pagination {
+.field-value-display {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 10px;
-  margin-top: 10px;
-  border-top: 1px solid rgba(105, 227, 111, 0.08);
-  flex-shrink: 0;
-}
-
-.rec-pagination-info {
-  font-size: 11px;
-  color: #5a7a9a;
-}
-
-.rec-pagination-controls {
-  display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
 }
 
-.rec-page-btn {
-  padding: 3px 8px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 3px;
-  color: #e8f3ff;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.rec-page-btn:hover:not(:disabled) {
-  border-color: #69e36f;
-  color: #69e36f;
-}
-
-.rec-page-btn.active {
-  background: rgba(105, 227, 111, 0.2);
-  border-color: #69e36f;
-  color: #69e36f;
-}
-
-.rec-page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal {
-  background: rgba(5, 26, 50, 0.98);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 10px;
-  width: 720px;
-  max-width: 90vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.modal-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #e8f3ff;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.modal-title-icon {
-  color: #ffb347;
-}
-
-.modal-close {
-  background: none;
-  border: none;
-  color: #8fa9c8;
-  font-size: 24px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0 4px;
-}
-
-.modal-close:hover {
-  color: #e8f3ff;
-}
-
-.modal-body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.duplicate-compare {
-  display: flex;
-  gap: 16px;
-  align-items: stretch;
-}
-
-.compare-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.compare-label {
+.field-value-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 14px;
-  border-radius: 6px 6px 0 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.new-label {
-  background: rgba(47, 156, 255, 0.15);
-  color: #2f9cff;
-  border: 1px solid rgba(47, 156, 255, 0.3);
-  border-bottom: none;
-}
-
-.existing-label {
-  background: rgba(166, 108, 255, 0.15);
-  color: #a66cff;
-  border: 1px solid rgba(166, 108, 255, 0.3);
-  border-bottom: none;
-}
-
-.compare-content {
-  flex: 1;
-  padding: 12px 14px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(105, 227, 111, 0.08);
-  border-radius: 0 0 6px 6px;
-}
-
-.compare-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(105, 227, 111, 0.05);
-  gap: 12px;
-}
-
-.compare-item:last-child {
-  border-bottom: none;
-}
-
-.compare-key {
   font-size: 12px;
+}
+
+.field-value-label {
   color: #8fa9c8;
   flex-shrink: 0;
 }
 
-.compare-val {
-  font-size: 12px;
+.field-value-text {
   color: #e8f3ff;
-  text-align: right;
-  word-break: break-all;
+  font-weight: 500;
 }
 
-.compare-val.hash {
-  font-family: monospace;
-  font-size: 11px;
-  color: #8fa9c8;
-}
-
-.compare-val.task-list {
+.field-value-row.confirmed .field-value-text {
   color: #2f9cff;
 }
 
-.compare-vs {
+.field-actions {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 80px;
+  gap: 8px;
+  margin-top: 4px;
 }
 
-.vs-badge {
+.field-action-btn {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 12px 16px;
-  background: rgba(255, 179, 71, 0.1);
-  border: 1px solid rgba(255, 179, 71, 0.3);
-  border-radius: 8px;
-}
-
-.vs-badge span {
+  gap: 3px;
+  padding: 2px 6px;
   font-size: 11px;
-  color: #ffb347;
-}
-
-.vs-badge strong {
-  font-size: 18px;
-  color: #ffb347;
-  font-weight: 700;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 20px;
-  border-top: 1px solid rgba(105, 227, 111, 0.1);
-}
-
-.modal-btn {
-  padding: 8px 18px;
-  background: rgba(105, 227, 111, 0.08);
-  border: 1px solid rgba(105, 227, 111, 0.2);
-  border-radius: 6px;
   color: #8fa9c8;
-  font-size: 12px;
+  background: transparent;
+  border: 1px solid rgba(143, 169, 200, 0.15);
+  border-radius: 3px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.modal-btn:hover {
-  background: rgba(105, 227, 111, 0.15);
+.field-action-btn:hover {
+  color: #2f9cff;
+  border-color: rgba(47, 156, 255, 0.3);
+}
+
+.field-confidence {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #5a7a9a;
+}
+
+.field-edit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.field-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.field-edit-label {
+  color: #8fa9c8;
+}
+
+.field-edit-ai-value {
+  color: #e8f3ff;
+  font-weight: 500;
+}
+
+.field-edit-input {
+  width: 100%;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(47, 156, 255, 0.3);
+  border-radius: 4px;
+  color: #e8f3ff;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.field-edit-input:focus {
+  border-color: #2f9cff;
+}
+
+.field-edit-reason {
+  width: 100%;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 79, 94, 0.2);
+  border-radius: 4px;
+  color: #e8f3ff;
+  font-size: 12px;
+  outline: none;
+  resize: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.field-edit-reason:focus {
+  border-color: rgba(255, 79, 94, 0.5);
+}
+
+.field-edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ─── Tab: Anomaly ─── */
+.tab-anomaly {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 0;
+}
+
+.anomaly-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.anomaly-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8fa9c8;
+  font-weight: 600;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(47, 156, 255, 0.08);
+}
+
+.anomaly-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #5a7a9a;
+  background: rgba(143, 169, 200, 0.1);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.anomaly-empty {
+  font-size: 12px;
+  color: #5a7a9a;
+  padding: 8px 0;
+}
+
+.anomaly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.anomaly-item {
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 79, 94, 0.15);
+  border-radius: 6px;
+}
+
+.anomaly-item.blocking {
+  border-color: rgba(255, 79, 94, 0.3);
+  background: rgba(255, 79, 94, 0.05);
+}
+
+.anomaly-item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.anomaly-icon {
+  color: #ff4f5e;
+  flex-shrink: 0;
+}
+
+.anomaly-type {
+  font-size: 12px;
+  color: #e8f3ff;
+  font-weight: 500;
+}
+
+.anomaly-severity {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.anomaly-severity.blocking {
+  color: #ff4f5e;
+  background: rgba(255, 79, 94, 0.15);
+}
+
+.anomaly-severity.warning {
+  color: #ffb347;
+  background: rgba(255, 179, 71, 0.15);
+}
+
+.anomaly-message {
+  font-size: 12px;
+  color: #8fa9c8;
+  line-height: 1.5;
+}
+
+.anomaly-action {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #2f9cff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.anomaly-action:hover {
+  text-decoration: underline;
+}
+
+.no-candidate-hint {
+  font-size: 12px;
+  color: #8fa9c8;
+  padding: 8px 10px;
+  background: rgba(47, 156, 255, 0.08);
+  border: 1px solid rgba(47, 156, 255, 0.15);
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.candidate-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(47, 156, 255, 0.08);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.candidate-item:hover {
+  border-color: rgba(47, 156, 255, 0.2);
+}
+
+.candidate-item.selected {
+  border-color: rgba(47, 156, 255, 0.4);
+  background: rgba(47, 156, 255, 0.05);
+}
+
+.candidate-checkbox {
+  display: flex;
+  align-items: flex-start;
+  cursor: pointer;
+  padding-top: 2px;
+}
+
+.candidate-checkbox input {
+  display: none;
+}
+
+.checkbox-custom {
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(143, 169, 200, 0.3);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.candidate-checkbox input:checked + .checkbox-custom {
+  background: #2f9cff;
+  border-color: #2f9cff;
+}
+
+.candidate-checkbox input:checked + .checkbox-custom::after {
+  content: '✓';
+  color: #031020;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.candidate-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.candidate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.candidate-name {
+  font-size: 13px;
+  color: #e8f3ff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-module {
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.candidate-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.candidate-score {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.candidate-reason {
+  color: #8fa9c8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.archive-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.archive-label {
+  font-size: 12px;
+  color: #8fa9c8;
+}
+
+.archive-value {
+  font-size: 13px;
+  color: #e8f3ff;
+  font-weight: 500;
+  text-align: right;
+}
+
+/* ─── Done zone ─── */
+.done-zone {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.done-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px;
+  max-width: 500px;
+}
+
+.done-icon {
   color: #69e36f;
 }
 
-.modal-btn.primary {
-  background: linear-gradient(135deg, #69e36f, #2f9cff);
-  color: #031020;
+.done-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e8f3ff;
+}
+
+.done-summary {
+  font-size: 14px;
+  color: #8fa9c8;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.done-linked {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.done-linked-title {
+  font-size: 13px;
+  color: #e8f3ff;
   font-weight: 600;
-  border: none;
+  margin-bottom: 8px;
 }
 
-.modal-btn.secondary {
-  background: rgba(255, 79, 94, 0.08);
-  border-color: rgba(255, 79, 94, 0.2);
-  color: #ff8a96;
+.done-linked-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(105, 227, 111, 0.05);
+  border: 1px solid rgba(105, 227, 111, 0.15);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #e8f3ff;
+  margin-bottom: 4px;
 }
 
-.modal-btn.secondary:hover {
-  background: rgba(255, 79, 94, 0.15);
+.done-linked-icon {
+  color: #69e36f;
+  flex-shrink: 0;
+}
+
+.done-linked-progress {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8fa9c8;
+}
+
+.done-continue-btn {
+  margin-top: 12px;
+}
+
+/* ─── Failed zone ─── */
+.failed-zone {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.failed-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px;
+  max-width: 500px;
+}
+
+.failed-icon {
+  color: #ff4f5e;
+}
+
+.failed-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e8f3ff;
+}
+
+.failed-message {
+  font-size: 14px;
+  color: #8fa9c8;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.failed-retry-btn {
+  margin-top: 8px;
+}
+
+/* ─── Bottom actions ─── */
+.smart-upload-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.action-left {
+  display: flex;
+  gap: 8px;
+}
+
+.action-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ack-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #ffb347;
+}
+
+.ack-checkbox input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: #ffb347;
+}
+
+.ack-text {
+  white-space: nowrap;
+}
+
+/* ─── Hidden ─── */
+.hidden-file-input {
+  display: none;
 }
 </style>

@@ -28,9 +28,20 @@ if (Test-Path $PidFile) {
   if ($OldPid) {
     $Running = Get-Process -Id ([int]$OldPid) -ErrorAction SilentlyContinue
     if ($Running) {
-      Write-Host "Luoyi ESG API already running. PID=$OldPid"
-      Write-Host "Health: http://127.0.0.1:8765/health"
-      exit 0
+      # BaseHTTP loads handlers at process start; recycle when server sources changed.
+      $NewestSource = Get-ChildItem -Path $ServerDir -Filter "*.py" -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+      $NeedsReload = $NewestSource -and ($NewestSource.LastWriteTime -gt $Running.StartTime)
+      if (-not $NeedsReload) {
+        Write-Host "Luoyi ESG API already running. PID=$OldPid"
+        Write-Host "Health: http://127.0.0.1:8765/health"
+        exit 0
+      }
+      Write-Host "Backend sources changed since PID=$OldPid started; restarting..." -ForegroundColor Yellow
+      Stop-Process -Id ([int]$OldPid) -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 1
+      Remove-Item $PidFile -ErrorAction SilentlyContinue
     }
   }
 }

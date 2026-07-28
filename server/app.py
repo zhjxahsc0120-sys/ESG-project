@@ -12,6 +12,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 import mysql_api
 import monthly_report_readiness
 import monthly_report_overview
+import assistant_qa
+import ai_document_analysis
 from mysql_db import mysql_enabled, mysql_ping
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1305,6 +1307,13 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, topic)
             return
 
+        # ESG 智能助手 · 库驱动问答（builders 内部容错；不依赖 try_mysql 短路）
+        if path in {"/api/assistant/ask", "/api/assistant/qa"}:
+            question = (query.get("question") or query.get("q") or [None])[0]
+            question_id = (query.get("question_id") or query.get("questionId") or [None])[0]
+            json_response(self, assistant_qa.ask(question, question_id))
+            return
+
         if path == "/api/monthly-report/readiness":
             report_period = (query.get("reportPeriod") or [""])[0]
             if not report_period:
@@ -1369,6 +1378,24 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/workspace/summary":
             json_response(self, get_workspace_summary())
+            return
+
+        if path.startswith("/api/esg/document/") and path.endswith("/result"):
+            parts = path.split("/")
+            try:
+                analysis_id = int(parts[4])
+            except (IndexError, ValueError):
+                bad_request(self, "文档解析 ID 无效")
+                return
+            try:
+                result = ai_document_analysis.get_analysis_result(analysis_id)
+            except ValueError as exc:
+                bad_request(self, str(exc))
+                return
+            if result is None:
+                not_found(self)
+            else:
+                json_response(self, result)
             return
 
         if path == "/api/workspace/tasks":
@@ -1473,6 +1500,23 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
+        if path in {"/api/assistant/ask", "/api/assistant/qa"}:
+            try:
+                body = read_json_body(self)
+            except json.JSONDecodeError:
+                bad_request(self, "请求体不是合法 JSON")
+                return
+            question = body.get("question") or body.get("q")
+            question_id = body.get("question_id") or body.get("questionId")
+            json_response(
+                self,
+                assistant_qa.ask(
+                    question if isinstance(question, str) else None,
+                    question_id if isinstance(question_id, str) else None,
+                ),
+            )
+            return
+
         if path == "/api/workspace/files/upload":
             try:
                 payload = read_upload_payload(self)
@@ -1490,6 +1534,15 @@ class Handler(BaseHTTPRequestHandler):
             payload = read_json_body(self)
         except json.JSONDecodeError:
             bad_request(self, "请求体不是合法 JSON")
+            return
+
+        if path == "/api/esg/document/analyze":
+            try:
+                result = ai_document_analysis.analyze_document(payload)
+            except ValueError as exc:
+                bad_request(self, str(exc))
+                return
+            json_response(self, result, HTTPStatus.CREATED)
             return
 
         if path.startswith("/api/workspace/tasks/"):

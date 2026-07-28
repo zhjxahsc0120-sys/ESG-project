@@ -22,7 +22,7 @@ function handleNavClick(key: string) {
   <header class="header-nav">
     <div class="header-top-glow" />
     <div class="header-title-wrap">
-      <h1 class="header-title">罗宜高速 <span>ESG</span> 综合数据管理平台</h1>
+      <h1 class="header-title">宜罗高速 <span>ESG</span> 数字化看板</h1>
     </div>
     <nav class="header-nav-bar">
       <ul class="header-nav-list">

@@ -10,9 +10,11 @@ import {
   recentSessions,
   quickCategories,
   welcomeQuestions,
-  createEnvIssuesAnswer,
-  getEmptyAcceptanceSession,
+  welcomeQuestionRoutes,
+  demoBusinessAnswers,
 } from '@/data/assistant.mock'
+import { askAssistant } from '@/services/api'
+import { normalizeBusinessAnswer } from '@/utils/assistant-business-answer'
 
 const SCREEN_WIDTH = 1920
 const SCREEN_HEIGHT = 1080
@@ -61,7 +63,56 @@ function handleNavClick(key: string) {
   }
 }
 
-function handleSendMessage(text: string) {
+function formatNow(): string {
+  if (isAcceptanceMode.value) return '2026-07-20 10:30:00'
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function resolveAskPayload(text: string): { question: string; questionId?: string } {
+  const routeHit = welcomeQuestionRoutes[text.trim()]
+  if (routeHit?.questionId) {
+    return { question: text.trim(), questionId: routeHit.questionId }
+  }
+  return { question: text.trim() }
+}
+
+function fallbackAnswer(question: string): ChatMessage {
+  const demo = demoBusinessAnswers[question.trim()]
+  if (demo) {
+    return {
+      id: 'a' + Date.now(),
+      time: formatNow(),
+      ...demo,
+    }
+  }
+  return {
+    id: 'a' + Date.now(),
+    role: 'assistant',
+    content:
+      '当前数据已更新通道暂不可用。请确认服务已启动后重试，或改用下列业务问题：\n' +
+      '· 当前环保风险情况如何？\n' +
+      '· 如果现在接受上级检查，主要风险是什么？\n' +
+      '· 当前重大安全风险有哪些？',
+    time: formatNow(),
+    statusLevel: '需重点关注',
+    statusConclusion:
+      '当前数据已更新通道暂不可用。请稍后重试，或从推荐业务问题继续查询。',
+    nextActions: [
+      { label: '当前环保风险情况如何？', question: '当前环保风险情况如何？' },
+      { label: '如果现在接受上级检查，主要风险是什么？', question: '如果现在接受上级检查，主要风险是什么？' },
+      { label: '应对上级环保检查应准备哪些合规资料？', question: '应对上级环保检查应准备哪些合规资料？' },
+    ],
+    followUps: [
+      '当前环保风险情况如何？',
+      '如果现在接受上级检查，主要风险是什么？',
+      '应对上级环保检查应准备哪些合规资料？',
+    ],
+  }
+}
+
+async function handleSendMessage(text: string) {
   if (!text.trim() || isLoading.value) return
   const userMsg: ChatMessage = {
     id: 'u' + Date.now(),
@@ -79,24 +130,35 @@ function handleSendMessage(text: string) {
     loading: true,
   }
   messages.value.push(loadingMsg)
-  setTimeout(() => {
-    const answer = createEnvIssuesAnswer()
-    answer.id = 'a' + Date.now()
-    const lastIdx = messages.value.length - 1
-    if (messages.value[lastIdx]?.loading) {
-      messages.value[lastIdx] = answer
-    } else {
-      messages.value.push(answer)
-    }
-    isLoading.value = false
-  }, 1200)
-}
 
-function formatNow(): string {
-  if (isAcceptanceMode.value) return '2026-07-20 10:30:00'
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  let answer: ChatMessage
+  try {
+    const payload = resolveAskPayload(text)
+    const res = await askAssistant(payload)
+    const msg = res?.data?.message
+    if (msg) {
+      answer = normalizeBusinessAnswer({
+        message: msg,
+        intentKey: res?.data?.intentKey,
+        questionId: res?.data?.questionId,
+        question: text.trim(),
+        id: 'a' + Date.now(),
+        time: formatNow(),
+      })
+    } else {
+      answer = fallbackAnswer(text)
+    }
+  } catch {
+    answer = fallbackAnswer(text)
+  }
+
+  const lastIdx = messages.value.length - 1
+  if (messages.value[lastIdx]?.loading) {
+    messages.value[lastIdx] = answer
+  } else {
+    messages.value.push(answer)
+  }
+  isLoading.value = false
 }
 
 function handleNewSession() {
@@ -105,16 +167,24 @@ function handleNewSession() {
 }
 
 function handleWelcomeClick(question: string) {
-  handleSendMessage(question)
+  void handleSendMessage(question)
 }
 
-function handleQuickCategory(question: string) {
-  handleSendMessage(question)
+function handleQuickCategory(name: string) {
+  const map: Record<string, string> = {
+    '环境 E': '当前环保风险情况如何？',
+    '社会 S': '当前重大安全风险有哪些？',
+    '治理 G': '如果现在接受上级检查，主要风险是什么？',
+    碳专题: '项目累计碳排放是多少？',
+    月报专题: '本月ESG月报还有哪些资料缺口？',
+  }
+  void handleSendMessage(map[name] || name)
 }
 
-function handleSessionClick(sessionId: string) {
-  if (isAcceptanceMode.value && sessionId === '1') {
-    messages.value = getEmptyAcceptanceSession()
+async function handleSessionClick(sessionId: string) {
+  const session = recentSessions.find((s) => s.id === sessionId)
+  if (session?.title) {
+    await handleSendMessage(session.title)
   }
 }
 
@@ -124,14 +194,14 @@ function handleViewDataBasis(data: AssistantDataBasis) {
 }
 
 function handleFollowUp(question: string) {
-  handleSendMessage(question)
+  void handleSendMessage(question)
 }
 
 onMounted(() => {
   handleResize()
   window.addEventListener('resize', handleResize)
   if (isAcceptanceMode.value) {
-    messages.value = getEmptyAcceptanceSession()
+    void handleSendMessage('当前环保风险情况如何？')
   }
 })
 
@@ -213,7 +283,6 @@ onUnmounted(() => {
   background: linear-gradient(180deg, #030d18 0%, #06182a 42%, #041322 100%);
   overflow: hidden;
 
-  // 第二层：极淡网格纹理
   &::before {
     content: "";
     position: absolute;
@@ -226,7 +295,6 @@ onUnmounted(() => {
     z-index: 0;
   }
 
-  // 第三层：中部柔和光晕
   &::after {
     content: "";
     position: absolute;

@@ -4,6 +4,7 @@ import type { E01EventDetail, E01EventsPayload, E01PointTrendPayload } from '@/t
 import type { E02IssueDetail, E02IssuesPayload } from '@/types/e02'
 import type { E03IssueDetail, E03IssuesPayload } from '@/types/e03'
 import type { S02RiskDetail, S02RisksPayload } from '@/types/s02'
+import type { AssistantAskResponse } from '@/types/assistant'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
 
@@ -23,6 +24,22 @@ export async function apiHealth(): Promise<{ ok: boolean; service: string; db: s
 
 export async function getDashboardKpis(): Promise<{ groups: KpiGroup[] } | null> {
   return apiGet('/api/dashboard/kpis')
+}
+
+export async function askAssistant(payload: {
+  question?: string
+  questionId?: string
+}): Promise<AssistantAskResponse | null> {
+  const body: Record<string, string> = {}
+  if (payload.question) body.question = payload.question
+  if (payload.questionId) body.questionId = payload.questionId
+  const posted = await apiPost<AssistantAskResponse>('/api/assistant/ask', body)
+  if (posted) return posted
+  const params = new URLSearchParams()
+  if (payload.question) params.set('question', payload.question)
+  if (payload.questionId) params.set('questionId', payload.questionId)
+  const query = params.toString()
+  return apiGet<AssistantAskResponse>(`/api/assistant/qa${query ? `?${query}` : ''}`)
 }
 
 export async function getDashboardKpiS01(): Promise<S01Data | null> {

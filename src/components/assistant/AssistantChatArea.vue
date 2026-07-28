@@ -56,14 +56,13 @@ watch(
     <div class="chat-header">
       <div class="chat-title-group">
         <h2 class="chat-title">ESG智能助手</h2>
-        <p class="chat-subtitle">面向项目管理人员的ESG数据查询、问题追踪、资料检索和辅助分析入口</p>
+        <p class="chat-subtitle">高速项目 ESG 管理助手：状态判断 · 风险事项 · 数据依据 · 下一步建议；上级检查可下载合规资料包</p>
       </div>
       <div class="chat-status">
         <div class="status-item">
           <span class="status-dot" />
           <span>数据已更新</span>
         </div>
-        <div class="status-tag">功能验证模式</div>
       </div>
     </div>
 
@@ -154,15 +153,6 @@ watch(
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 6px rgba(67, 211, 107, 0.5);
-}
-
-.status-tag {
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  background: rgba(139, 166, 195, 0.1);
-  border: 1px solid var(--border-soft);
-  border-radius: 4px;
 }
 
 .chat-messages {

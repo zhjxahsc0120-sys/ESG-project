@@ -5,7 +5,7 @@ import HeaderNav from '@/components/layout/HeaderNav.vue'
 import WorkspaceNav from '@/components/workspace/WorkspaceNav.vue'
 import WorkspaceHome from '@/components/workspace/WorkspaceHome.vue'
 import WorkspaceTasks from '@/components/workspace/WorkspaceTasks.vue'
-import WorkspaceSmartUpload from '@/components/workspace/WorkspaceSmartUpload.vue'
+import WorkspaceSmartEntry from '@/components/workspace/WorkspaceSmartEntry.vue'
 import WorkspaceReview from '@/components/workspace/WorkspaceReview.vue'
 import WorkspaceDocuments from '@/components/workspace/WorkspaceDocuments.vue'
 import TaskModal from '@/components/workspace/TaskModal.vue'
@@ -43,7 +43,7 @@ function handleResize() {
   windowHeight.value = window.innerHeight
 }
 
-const activeNav = ref('workspace')
+const activeNav = ref('smart-upload')
 const selectedStatus = ref('')
 const selectedTaskId = ref<string | null>(null)
 const forceTab = ref<string>('')
@@ -133,8 +133,8 @@ onUnmounted(() => {
           <HeaderNav active-key="workspace" @navigate="handlePlatformNav" />
         </div>
 
-        <!-- 二级 Tab：保持在红框下方，不并入 HeaderNav -->
-        <WorkspaceNav :active-nav="activeNav" @navigate="handleNavigate" />
+        <!-- 二级导航：本轮隐藏，不保留高度和空白占位 -->
+        <WorkspaceNav v-if="activeNav !== 'smart-upload'" :active-nav="activeNav" @navigate="handleNavigate" />
 
         <main class="workspace-main">
           <WorkspaceHome
@@ -147,7 +147,7 @@ onUnmounted(() => {
             :initial-status="selectedStatus"
             @open-task="handleOpenTask"
           />
-          <WorkspaceSmartUpload
+          <WorkspaceSmartEntry
             v-else-if="activeNav === 'smart-upload'"
           />
           <WorkspaceReview
@@ -175,6 +175,8 @@ onUnmounted(() => {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  /* 避免聚焦底部操作按钮时浏览器程序性滚动画布，保持标题与流程条稳定 */
+  overflow: clip;
   background: #020b18;
 }
 

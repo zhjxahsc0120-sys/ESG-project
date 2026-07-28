@@ -17,7 +17,7 @@ import type {
 export const navItems: NavItem[] = [
   { key: 'dashboard', label: '工作台首页', active: true },
   { key: 'assistant', label: 'ESG智能助手' },
-  { key: 'workspace', label: '数据填报' },
+  { key: 'workspace', label: 'ESG智能数据填报' },
 ]
 
 export const kpiGroups: KpiGroup[] = [
