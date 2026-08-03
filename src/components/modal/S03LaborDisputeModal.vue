@@ -290,7 +290,7 @@ onUnmounted(() => {
       <header class="s03-header">
         <h2 id="s03-modal-title">
           <span class="title-key">S03</span>
-          <span class="title-name">当前未办结劳务用工纠纷事项数</span>
+          <span class="title-name">农民工权益保障</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />

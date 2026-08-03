@@ -27,7 +27,17 @@ function formatValue(value: string | number) {
   return value
 }
 
-const isLongValue = computed(() => formatValue(props.item.value).length >= 5)
+const primaryText = computed(() => {
+  if (props.item.displayText) return props.item.displayText
+  return formatValue(props.item.value)
+})
+
+const showUnit = computed(() => {
+  if (props.item.displayText) return false
+  return Boolean(props.item.unit)
+})
+
+const isLongValue = computed(() => primaryText.value.length >= 5)
 
 function handleClick() {
   emit('select', props.item.key)
@@ -41,6 +51,7 @@ function handleClick() {
       'kpi-card--multiline': item.label.length > 10,
       'kpi-card--long-value': isLongValue,
       'kpi-card--e04': item.key === 'E04',
+      'kpi-card--text-value': Boolean(item.displayText),
     }"
     :data-kpi-key="item.key"
     role="button"
@@ -51,10 +62,11 @@ function handleClick() {
     <div class="kpi-label">{{ item.label }}</div>
     <div class="kpi-value-row">
       <span class="kpi-value" :style="{ color: themeColors[theme] }">
-        {{ formatValue(item.value) }}
+        {{ primaryText }}
       </span>
-      <span v-if="item.unit" class="kpi-unit">{{ item.unit }}</span>
+      <span v-if="showUnit" class="kpi-unit">{{ item.unit }}</span>
     </div>
+    <div v-if="item.hint" class="kpi-hint">{{ item.hint }}</div>
   </div>
 </template>
 
@@ -150,6 +162,24 @@ function handleClick() {
   &.kpi-card--e04 .kpi-label {
     letter-spacing: -0.15px;
     text-overflow: clip;
+  }
+
+  .kpi-hint {
+    margin-top: 4px;
+    max-width: 100%;
+    padding: 0 2px;
+    color: var(--text-tertiary, #7f99b8);
+    font-size: 10px;
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &.kpi-card--text-value .kpi-value {
+    font-size: 18px;
+    letter-spacing: 0;
   }
 }
 </style>

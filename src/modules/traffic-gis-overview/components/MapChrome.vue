@@ -19,12 +19,16 @@ const props = withDefaults(defineProps<{
   sectionScope?: SectionScope;
   showMonitors?: boolean;
   showRiskPoints?: boolean;
+  showEcoPoints?: boolean;
+  showAppealPoints?: boolean;
 }>(), {
   showConfigButton: true,
   presentationMode: 'preview',
   sectionScope: 'all',
   showMonitors: true,
   showRiskPoints: true,
+  showEcoPoints: true,
+  showAppealPoints: false,
 });
 
 const emit = defineEmits<{
@@ -33,6 +37,8 @@ const emit = defineEmits<{
   sectionChange: [SectionScope];
   toggleMonitors: [];
   toggleRiskPoints: [];
+  toggleEcoPoints: [];
+  toggleAppealPoints: [];
 }>();
 
 const sectionOpen = ref(false);
@@ -110,6 +116,22 @@ onBeforeUnmount(() => {
         @click="$emit('toggleRiskPoints')"
       >
         安全风险点
+      </button>
+      <button
+        type="button"
+        :class="{ active: showEcoPoints }"
+        title="生态保护点（生态区 / 弃渣场等）"
+        @click="$emit('toggleEcoPoints')"
+      >
+        生态保护点
+      </button>
+      <button
+        type="button"
+        :class="{ active: showAppealPoints }"
+        title="群众诉求点（空间落点后续支持）"
+        @click="$emit('toggleAppealPoints')"
+      >
+        群众诉求点
       </button>
 
       <button v-if="showConfigButton" :class="{ active: configOpen }" @click="$emit('config')">配置后台</button>

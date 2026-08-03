@@ -170,7 +170,7 @@ defineExpose({ reload: loadOverview, payload, openPoints })
 <template>
   <aside class="e01-panel e01-panel--green">
     <header class="e01-head">
-      <h2>环境监测超标</h2>
+      <h2>环境影响事件</h2>
       <button type="button" class="e01-close" aria-label="关闭E01" @click="emit('close')">×</button>
     </header>
 

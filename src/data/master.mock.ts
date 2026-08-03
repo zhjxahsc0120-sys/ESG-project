@@ -12,6 +12,9 @@ export interface MasterKpiItem {
   fullName: string       // 完整正式指标名称，用于弹窗/详情/Tooltip
   value: string | number
   unit: string
+  hint?: string
+  displayText?: string
+  ledgerStatus?: string | null
 }
 
 export interface MasterKpiGroup {
@@ -50,9 +53,9 @@ export const masterKpiGroups: MasterKpiGroup[] = [
     letter: 'E',
     theme: 'green',
     items: [
-      { key: 'E01', label: '环境监测超标项次', fullName: '环境监测超标项次', value: 2, unit: '项次' },
-      { key: 'E02', label: '未闭环环保问题', fullName: '当前未闭环环保问题事项数', value: 5, unit: '项' },
-      { key: 'E03', label: '未闭环水保问题', fullName: '当前未闭环水土保持问题事项数', value: 7, unit: '项' },
+      { key: 'E01', label: '环境影响事件', fullName: '环境影响事件', value: 2, unit: '项' },
+      { key: 'E02', label: '未闭环环境问题', fullName: '未闭环环境问题', value: 12, unit: '项' },
+      { key: 'E03', label: '生态保护事项', fullName: '生态保护事项', value: 7, unit: '项' },
       { key: 'E04', label: '项目累计碳排放', fullName: '项目累计碳排放', value: 6175, unit: 'tCO₂e' },
     ],
   },
@@ -63,9 +66,23 @@ export const masterKpiGroups: MasterKpiGroup[] = [
     theme: 'blue',
     items: [
       { key: 'S01', label: '连续安全生产天数', fullName: '连续安全生产天数', value: 368, unit: '天' },
-      { key: 'S02', label: '在管较大及以上安全风险点', fullName: '当前在管较大及以上安全风险点数', value: 6, unit: '项' },
-      { key: 'S03', label: '未办结劳务用工纠纷', fullName: '当前未办结劳务用工纠纷事项数', value: 2, unit: '项' },
-      { key: 'S04', label: '未办结群众诉求', fullName: '当前未办结群众诉求事项数', value: 3, unit: '项' },
+      { key: 'S02', label: '重大风险源管控', fullName: '重大风险源管控', value: 6, unit: '项' },
+      {
+        key: 'S03',
+        label: '农民工权益保障',
+        fullName: '农民工权益保障',
+        value: 2,
+        unit: '项',
+        hint: '工资发放达标率：暂无评价数据',
+      },
+      {
+        key: 'S04',
+        label: '群众诉求闭环',
+        fullName: '群众诉求闭环',
+        value: 3,
+        unit: '项',
+        hint: '投诉 2 · 信访 1 · 化解率：暂无有效数据',
+      },
     ],
   },
   {
@@ -74,10 +91,32 @@ export const masterKpiGroups: MasterKpiGroup[] = [
     letter: 'G',
     theme: 'purple',
     items: [
-      { key: 'G01', label: '未完成报批报建', fullName: '当前未完成法定报批报建事项数', value: 5, unit: '项' },
-      { key: 'G02', label: '许可临期及逾期', fullName: '当前临期及逾期许可事项数', value: 5, unit: '项' },
-      { key: 'G03', label: '未关闭检查整改', fullName: '当前未关闭检查整改事项数', value: 6, unit: '项' },
-      { key: 'G04', label: '待补齐合规资料', fullName: '当前待补齐关键合规资料项数', value: 4, unit: '项' },
+      {
+        key: 'G01',
+        label: '合规审批事项',
+        fullName: '合规审批事项',
+        value: 5,
+        unit: '项',
+        hint: '环评批复√ 水保批复√ 施工许可√',
+      },
+      {
+        key: 'G02',
+        label: '合规问题闭环',
+        fullName: '合规问题闭环',
+        value: 6,
+        unit: '项',
+        hint: '问题 9 · 整改 6 · 闭环率 33%',
+      },
+      {
+        key: 'G03',
+        label: '参建单位履约评价',
+        fullName: '参建单位履约评价',
+        value: 0,
+        unit: '',
+        displayText: '待评价',
+        ledgerStatus: 'pending',
+      },
+      { key: 'G04', label: '治理内控风险', fullName: '治理内控风险', value: 9, unit: '项' },
     ],
   },
 ]
@@ -100,12 +139,14 @@ export const masterTimelineSteps: MasterTimelineStep[] = [
 // 第二阶段：右栏三面板 + 时间轴 mock 数据
 // ─────────────────────────────────────────────
 
-// ── 合规保障与风险防控成效 ──
+// ── 综合风险态势与预警 ──
 export interface ComplianceMetric {
   key: string
   label: string
   value: number
   unit: string
+  tone?: 'red' | 'yellow' | 'blue' | 'neutral'
+  meaning?: string
 }
 
 export interface ComplianceBarItem {
@@ -122,23 +163,23 @@ export interface ComplianceFocusItem {
 }
 
 export const complianceMetrics: ComplianceMetric[] = [
-  { key: 'cm1', label: '合规点位', value: 12, unit: '个' },
-  { key: 'cm2', label: '碳排点位', value: 6, unit: '个' },
-  { key: 'cm3', label: '敏感区', value: 3, unit: '处' },
-  { key: 'cm4', label: '风险点', value: 6, unit: '处' },
+  { key: 'cm1', label: '红色预警', value: 3, unit: '项', tone: 'red', meaning: '立即督办' },
+  { key: 'cm2', label: '黄色预警', value: 5, unit: '项', tone: 'yellow', meaning: '重点关注' },
+  { key: 'cm3', label: '蓝色提醒', value: 8, unit: '项', tone: 'blue', meaning: '持续跟踪' },
+  { key: 'cm4', label: '风险事项总数', value: 16, unit: '项', tone: 'neutral' },
 ]
 
 export const complianceBars: ComplianceBarItem[] = [
-  { name: '报批报建完成', value: 18, unit: '项', ratio: 82 },
-  { name: '许可手续办理', value: 12, unit: '项', ratio: 65 },
-  { name: '整改事项关闭', value: 15, unit: '项', ratio: 71 },
-  { name: '资料归档', value: 8, unit: '项', ratio: 48 },
+  { name: '红色·立即督办', value: 3, unit: '项', ratio: 90 },
+  { name: '黄色·重点关注', value: 5, unit: '项', ratio: 70 },
+  { name: '蓝色·持续跟踪', value: 8, unit: '项', ratio: 55 },
+  { name: '已闭环事项', value: 12, unit: '项', ratio: 75 },
 ]
 
 export const complianceFocus: ComplianceFocusItem[] = [
-  { title: 'K37大桥施工许可续期', statusLabel: '临期预警', status: 'warning' },
-  { title: '2号取土场水土保持整改', statusLabel: '整改中', status: 'normal' },
-  { title: '隧道施工噪声超标未闭环', statusLabel: '督办中', status: 'danger' },
+  { title: '隧道施工噪声超标未闭环', statusLabel: '红色预警', status: 'danger' },
+  { title: 'K37大桥施工许可续期', statusLabel: '黄色预警', status: 'warning' },
+  { title: '2号取土场水土保持整改', statusLabel: '蓝色提醒', status: 'normal' },
 ]
 
 // ── 碳足迹与低碳增益 ──

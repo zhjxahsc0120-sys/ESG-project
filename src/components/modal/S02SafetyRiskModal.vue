@@ -303,7 +303,7 @@ onUnmounted(() => {
       <header class="s02-header">
         <h2 id="s02-modal-title">
           <span class="title-key">S02</span>
-          <span class="title-name">在管较大及以上安全风险点</span>
+          <span class="title-name">重大风险源管控</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />

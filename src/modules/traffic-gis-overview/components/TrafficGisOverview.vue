@@ -118,6 +118,10 @@ const loading = ref(true);
   const showMonitors = ref(true);
   /** S02 安全风险点显隐 / 强调 */
   const showRiskPoints = ref(true);
+  /** 生态保护点：ecological-zone / spoil-site */
+  const showEcoPoints = ref(true);
+  /** 群众诉求点：入口开关（当前图层可为空，后续扩展 appeal-point） */
+  const showAppealPoints = ref(false);
   const panelOpen = ref(false);
 
 /**
@@ -225,6 +229,19 @@ function filterLayer(layer: TrafficLayerDefinition) {
       return false;
     }
 
+    // 生态保护点：生态区 / 弃渣（弃土）场
+    if (
+      !showEcoPoints.value &&
+      (type === "ecological-zone" || type === "spoil-site")
+    ) {
+      return false;
+    }
+
+    // 群众诉求点：当前可能无要素，开关预留过滤 appeal-point
+    if (!showAppealPoints.value && (type === "appeal-point" || type === "appeal")) {
+      return false;
+    }
+
     if (layerGroup.value === "all" || layerGroup.value === "situation") {
       return true;
     }
@@ -232,7 +249,7 @@ function filterLayer(layer: TrafficLayerDefinition) {
       basic: ["road-section", "chainage"],
       environment: ["water-source", "ecological-zone", "spoil-site", "slope-monitor"],
       // S 社会：S02 风险点 + 作为 S02 落点的边坡监测点
-      social: ["risk-point", "slope-monitor"],
+      social: ["risk-point", "slope-monitor", "appeal-point", "appeal"],
       governance: [],
       situation: [],
     };
@@ -1282,6 +1299,8 @@ watch(
 
 watch(layerGroup, load);
 watch(showRiskPoints, load);
+watch(showEcoPoints, load);
+watch(showAppealPoints, load);
 watch(showMonitors, applyE01MonitorVisibility);
 watch(scope, async () => {
     if (scope.value !== "all") {
@@ -1310,11 +1329,15 @@ function handleOpenKpiSource(payload: GisBusinessLinkOpenPayload) {
       :section-scope="scope"
       :show-monitors="showMonitors"
       :show-risk-points="showRiskPoints"
+      :show-eco-points="showEcoPoints"
+      :show-appeal-points="showAppealPoints"
       @north="northUp"
       @config="panelOpen = !panelOpen"
       @section-change="scope = $event"
       @toggle-monitors="showMonitors = !showMonitors"
       @toggle-risk-points="showRiskPoints = !showRiskPoints"
+      @toggle-eco-points="showEcoPoints = !showEcoPoints"
+      @toggle-appeal-points="showAppealPoints = !showAppealPoints"
     />
     <div class="traffic-gis-overview__top">
       <div>

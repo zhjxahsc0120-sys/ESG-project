@@ -588,6 +588,58 @@
       margin-top: 1px;
       white-space: nowrap;
     }
+
+    .metric-meaning {
+      font-size: 9px;
+      color: var(--text-disabled);
+      margin-top: 1px;
+      white-space: nowrap;
+    }
+
+    .metric-tone-icon {
+      flex-shrink: 0;
+      align-self: center;
+    }
+
+    &.tone-red {
+      border-color: rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.1);
+
+      .metric-value,
+      .metric-tone-icon {
+        color: #ef4444;
+      }
+    }
+
+    &.tone-yellow {
+      border-color: rgba(234, 179, 8, 0.55);
+      background: rgba(234, 179, 8, 0.1);
+
+      .metric-value,
+      .metric-tone-icon {
+        color: #eab308;
+      }
+    }
+
+    &.tone-blue {
+      border-color: rgba(59, 130, 246, 0.55);
+      background: rgba(59, 130, 246, 0.1);
+
+      .metric-value,
+      .metric-tone-icon {
+        color: #3b82f6;
+      }
+    }
+
+    &.tone-neutral {
+      border-color: rgba(148, 163, 184, 0.4);
+      background: rgba(148, 163, 184, 0.08);
+
+      .metric-value,
+      .metric-tone-icon {
+        color: #cbd5e1;
+      }
+    }
   }
 }
 

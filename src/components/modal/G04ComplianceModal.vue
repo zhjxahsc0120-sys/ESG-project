@@ -228,7 +228,7 @@ onUnmounted(() => {
       <header class="g04-header">
         <h2 id="g04-modal-title">
           <span class="title-key">G04</span>
-          <span class="title-name">当前待补齐关键合规资料项数</span>
+          <span class="title-name">治理内控风险</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />

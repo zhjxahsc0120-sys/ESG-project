@@ -17,8 +17,8 @@ import S02SafetyRiskModal from './S02SafetyRiskModal.vue'
 import S03LaborDisputeModal from './S03LaborDisputeModal.vue'
 import S04MassAppealModal from './S04MassAppealModal.vue'
 import G01ApprovalModal from './G01ApprovalModal.vue'
-import G02LicenseModal from './G02LicenseModal.vue'
 import G03RectificationModal from './G03RectificationModal.vue'
+import G03ContractorEvalModal from './G03ContractorEvalModal.vue'
 import G04ComplianceModal from './G04ComplianceModal.vue'
 import E04CarbonEmissionModal from './E04CarbonEmissionModal.vue'
 import CarbonBenefitModal from './CarbonBenefitModal.vue'
@@ -1402,8 +1402,8 @@ onUnmounted(() => {
   <S03LaborDisputeModal v-else-if="detail.key === 'S03'" @close="emit('close')" />
   <S04MassAppealModal v-else-if="detail.key === 'S04'" @close="emit('close')" />
   <G01ApprovalModal v-else-if="detail.key === 'G01'" @close="emit('close')" />
-  <G02LicenseModal v-else-if="detail.key === 'G02'" @close="emit('close')" />
-  <G03RectificationModal v-else-if="detail.key === 'G03'" @close="emit('close')" />
+  <G03RectificationModal v-else-if="detail.key === 'G02'" @close="emit('close')" />
+  <G03ContractorEvalModal v-else-if="detail.key === 'G03'" @close="emit('close')" />
   <G04ComplianceModal v-else-if="detail.key === 'G04'" @close="emit('close')" />
   <E04CarbonEmissionModal v-else-if="detail.key === 'E04'" :detail="detail" @close="emit('close')" @retry="emit('retry')" />
   <CarbonBenefitModal v-else-if="detail.key === 'CARBON'" :detail="detail" @close="emit('close')" />

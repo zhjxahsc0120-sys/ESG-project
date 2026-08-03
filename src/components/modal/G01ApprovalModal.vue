@@ -268,7 +268,7 @@ onUnmounted(() => {
       <header class="g01-header">
         <h2 id="g01-modal-title">
           <span class="title-key">G01</span>
-          <span class="title-name">当前未完成法定报批报建</span>
+          <span class="title-name">合规审批事项</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />

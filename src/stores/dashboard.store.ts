@@ -8,6 +8,7 @@ import type {
   SensitiveArea,
   ComplianceMetric,
   EffectivenessItem,
+  WarningListItem,
   CarbonSource,
   ReductionMeasure,
   MonthlyReport,
@@ -23,6 +24,7 @@ import {
   complianceMetrics,
   effectivenessItems,
   safeguardItems,
+  warningListItems,
   carbonMetrics,
   carbonSources,
   reductionMeasures,
@@ -42,6 +44,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const compliance = ref<ComplianceMetric[]>(complianceMetrics)
   const effectiveness = ref<EffectivenessItem[]>(effectivenessItems)
   const safeguards = ref<string[]>(safeguardItems)
+  const warningItems = ref<WarningListItem[]>(warningListItems)
   const carbon = ref(carbonMetrics)
   const carbonSrc = ref<CarbonSource[]>(carbonSources)
   const reductions = ref<ReductionMeasure[]>(reductionMeasures)
@@ -65,6 +68,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (data.compliance?.metrics) compliance.value = data.compliance.metrics as ComplianceMetric[]
     if (data.compliance?.effectiveness) effectiveness.value = data.compliance.effectiveness as EffectivenessItem[]
     if (data.compliance?.safeguards) safeguards.value = data.compliance.safeguards
+    if (data.compliance?.warningItems) warningItems.value = data.compliance.warningItems as WarningListItem[]
     if (data.carbon?.metrics) carbon.value = data.carbon.metrics as typeof carbonMetrics
     if (data.carbon?.sources) carbonSrc.value = data.carbon.sources as CarbonSource[]
     if (data.carbon?.reductions) reductions.value = data.carbon.reductions as ReductionMeasure[]
@@ -120,6 +124,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     compliance,
     effectiveness,
     safeguards,
+    warningItems,
     carbon,
     carbonSrc,
     reductions,

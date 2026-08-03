@@ -302,8 +302,8 @@ onUnmounted(() => {
     >
       <header class="g03-header">
         <h2 id="g03-modal-title">
-          <span class="title-key">G03</span>
-          <span class="title-name">当前未关闭检查整改事项数</span>
+          <span class="title-key">G02</span>
+          <span class="title-name">合规问题闭环</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />

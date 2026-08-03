@@ -41,6 +41,25 @@ GROUP_META = {
     "G": {"key": "G", "title": "治理合规组", "theme": "purple", "status": "总体可控"},
 }
 
+# 首页驾驶舱指标正式名称（现场调研优化 V1.0；覆盖 indicator_result 旧文案）
+KPI_HOME_LABELS = {
+    "E01": {"label": "环境影响事件", "fullName": "环境影响事件", "unit": "项"},
+    "E02": {"label": "未闭环环境问题", "fullName": "未闭环环境问题", "unit": "项"},
+    "E03": {"label": "生态保护事项", "fullName": "生态保护事项", "unit": "项"},
+    "E04": {"label": "项目累计碳排放", "fullName": "项目累计碳排放", "unit": "tCO₂e"},
+    "S01": {"label": "连续安全生产天数", "fullName": "连续安全生产天数", "unit": "天"},
+    "S02": {"label": "重大风险源管控", "fullName": "重大风险源管控", "unit": "项"},
+    "S03": {"label": "农民工权益保障", "fullName": "农民工权益保障", "unit": "项"},
+    "S04": {"label": "群众诉求闭环", "fullName": "群众诉求闭环", "unit": "项"},
+    "G01": {"label": "合规审批事项", "fullName": "合规审批事项", "unit": "项"},
+    "G02": {"label": "合规问题闭环", "fullName": "合规问题闭环", "unit": "项"},
+    "G03": {"label": "参建单位履约评价", "fullName": "参建单位履约评价", "unit": ""},
+    "G04": {"label": "治理内控风险", "fullName": "治理内控风险", "unit": "项"},
+}
+
+# 生态保护事项：水保台账中与弃土/临时用地/表土/复垦/边坡/敏感相关的类型
+E03_ECO_TYPE_REGEX = r"(弃土|弃渣|临时用地|表土|复垦|边坡|生态|敏感)"
+
 E01_CONSTRUCTION_START = "2026-05-08 00:00:00"
 
 # E02 demo 闸：演示部署默认允许；正式部署默认拒绝
@@ -113,6 +132,109 @@ def next_id(table: str, start: int) -> int:
     return int(row["next_id"])
 
 
+def _safe_count(sql: str, params: tuple[Any, ...] = ()) -> int | None:
+    """Return COUNT result, or None when table/column unavailable."""
+    try:
+        row = query_one(sql, params)
+        if row is None or row.get("c") is None:
+            return 0
+        return int(row["c"])
+    except Exception:
+        return None
+
+
+def _build_s03_home_hint() -> str:
+    """Wage payment rate from salary_payment_record when available; else honest empty."""
+    total = _safe_count("SELECT COUNT(*) AS c FROM salary_payment_record")
+    if total is None or total == 0:
+        return "工资发放达标率：暂无评价数据 · 实名覆盖率：暂无评价数据"
+    paid = _safe_count(
+        """
+        SELECT COUNT(*) AS c FROM salary_payment_record
+        WHERE payment_status IN ('已确认', '已发放', '已支付', '正常', '达标')
+        """
+    )
+    if paid is None:
+        return "工资发放达标率：暂无评价数据 · 实名覆盖率：暂无评价数据"
+    rate = round(100.0 * paid / total)
+    return f"工资发放达标率 {rate}% · 实名覆盖率：暂无评价数据"
+
+
+def _build_s04_home_hint() -> str:
+    """Complaint / petition counts + resolve rate from appeal_record."""
+    total = _safe_count("SELECT COUNT(*) AS c FROM appeal_record")
+    if total is None:
+        return "投诉/信访：暂无有效数据"
+    if total == 0:
+        return "投诉 0 · 信访 0 · 化解率：暂无有效数据"
+    complaint = _safe_count(
+        """
+        SELECT COUNT(*) AS c FROM appeal_record
+        WHERE COALESCE(appeal_type, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+        """,
+        ("%投诉%", "%12345%", "%热线%"),
+    ) or 0
+    petition = _safe_count(
+        """
+        SELECT COUNT(*) AS c FROM appeal_record
+        WHERE COALESCE(appeal_type, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+        """,
+        ("%信访%", "%信访%", "%来访%"),
+    ) or 0
+    closed = _safe_count("SELECT COUNT(*) AS c FROM appeal_record WHERE status = '已办结'")
+    if closed is None or total == 0:
+        rate_text = "暂无有效数据"
+    else:
+        rate_text = f"{round(100.0 * closed / total)}%"
+    return f"投诉 {complaint} · 信访 {petition} · 化解率 {rate_text}"
+
+
+def _build_g01_checklist_hint() -> str:
+    """Status checklist for 环评/水保/施工许可 — no secret docs."""
+    try:
+        rows = query_all(
+            """
+            SELECT procedure_name, status, impact_node
+            FROM compliance_procedure
+            """
+        )
+    except Exception:
+        return "环评批复：暂无评价数据 · 水保批复：暂无评价数据 · 施工许可：暂无评价数据"
+
+    def mark(keywords: tuple[str, ...]) -> str:
+        matched = [
+            r for r in rows
+            if any(k in (r.get("procedure_name") or "") or k in (r.get("impact_node") or "") for k in keywords)
+        ]
+        if not matched:
+            return "—"
+        if any((r.get("status") or "") == "已完成" for r in matched):
+            return "√"
+        return "…"
+
+    eia = mark(("环评",))
+    water = mark(("水保", "水土保持"))
+    permit = mark(("施工许可", "专项施工"))
+    return f"环评批复{eia} 水保批复{water} 施工许可{permit}"
+
+
+def _build_g02_home_hint() -> str:
+    """Open issues / rectifications / closure rate."""
+    open_count = _safe_count("SELECT COUNT(*) AS c FROM rectification_record WHERE status <> '已关闭'")
+    total = _safe_count("SELECT COUNT(*) AS c FROM rectification_record")
+    closed = _safe_count("SELECT COUNT(*) AS c FROM rectification_record WHERE status = '已关闭'")
+    if open_count is None or total is None:
+        return "问题/整改：暂无有效数据"
+    if total == 0:
+        return "问题 0 · 整改 0 · 闭环率：暂无有效数据"
+    rate = round(100.0 * (closed or 0) / total)
+    return f"问题 {total} · 整改 {open_count} · 闭环率 {rate}%"
+
+
 def get_dashboard_kpis() -> dict:
     rows = query_all(
         """
@@ -163,6 +285,30 @@ def get_dashboard_kpis() -> dict:
         """
     ) if E02_ALLOW_DEMO else None
     e03_formal_row = query_one(
+        f"""
+        SELECT COUNT(*) AS c FROM water_protection_issue
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+          AND is_demo = 0 AND data_nature = 'formal'
+          AND effective_status = 'EFFECTIVE'
+          AND (
+            COALESCE(issue_type, '') REGEXP '{E03_ECO_TYPE_REGEX}'
+            OR COALESCE(issue_name, '') REGEXP '{E03_ECO_TYPE_REGEX}'
+          )
+        """
+    )
+    e03_demo_row = query_one(
+        f"""
+        SELECT COUNT(*) AS c FROM water_protection_issue
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+          AND is_demo = 1 AND data_nature = 'demo'
+          AND effective_status = 'EFFECTIVE'
+          AND (
+            COALESCE(issue_type, '') REGEXP '{E03_ECO_TYPE_REGEX}'
+            OR COALESCE(issue_name, '') REGEXP '{E03_ECO_TYPE_REGEX}'
+          )
+        """
+    ) if E03_ALLOW_DEMO else None
+    e03_all_formal_row = query_one(
         """
         SELECT COUNT(*) AS c FROM water_protection_issue
         WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
@@ -170,7 +316,7 @@ def get_dashboard_kpis() -> dict:
           AND effective_status = 'EFFECTIVE'
         """
     )
-    e03_demo_row = query_one(
+    e03_all_demo_row = query_one(
         """
         SELECT COUNT(*) AS c FROM water_protection_issue
         WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
@@ -219,7 +365,6 @@ def get_dashboard_kpis() -> dict:
         """
         SELECT COUNT(*) AS c FROM labor_dispute_record
         WHERE status <> '已办结'
-          AND dispute_type IN ('工资支付', '农民工工资', '工资上访')
           AND COALESCE(is_demo, 0) = 0
           AND COALESCE(data_nature, 'formal') = 'formal'
         """
@@ -228,20 +373,23 @@ def get_dashboard_kpis() -> dict:
         """
         SELECT COUNT(*) AS c FROM labor_dispute_record
         WHERE status <> '已办结'
-          AND dispute_type IN ('工资支付', '农民工工资', '工资上访')
           AND is_demo = 1 AND data_nature = 'demo'
         """
     ) if S03_ALLOW_DEMO else None
     s04_row = query_one("SELECT COUNT(*) AS c FROM appeal_record WHERE status <> '已办结'")
     s01_detail = _resolve_s01_snapshot()
     g01_row = query_one("SELECT COUNT(*) AS c FROM compliance_procedure WHERE status <> '已完成'")
-    g02_row = query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status IN ('临期', '逾期')")
-    g03_row = query_one("SELECT COUNT(*) AS c FROM rectification_record WHERE status <> '已关闭'")
-    g04_row = query_one("SELECT COUNT(*) AS c FROM compliance_material_gap WHERE status <> '已补齐'")
+    g02_permit_row = query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status IN ('临期', '逾期')")
+    g02_rect_row = query_one("SELECT COUNT(*) AS c FROM rectification_record WHERE status <> '已关闭'")
+    g04_gap_row = query_one("SELECT COUNT(*) AS c FROM compliance_material_gap WHERE status <> '已补齐'")
     e02_formal_count = int(e02_formal_row["c"]) if e02_formal_row and e02_formal_row["c"] is not None else 0
     e02_demo_count = int(e02_demo_row["c"]) if e02_demo_row and e02_demo_row["c"] is not None else 0
-    # 演示部署：返回演示数 + 角标；正式部署：返回正式数（应为0）
-    e02_display_value = e02_demo_count if E02_ALLOW_DEMO else e02_formal_count
+    e03_all_formal = int(e03_all_formal_row["c"]) if e03_all_formal_row and e03_all_formal_row["c"] is not None else 0
+    e03_all_demo = int(e03_all_demo_row["c"]) if e03_all_demo_row and e03_all_demo_row["c"] is not None else 0
+    # E02 升级：未闭环环保 + 未闭环水保
+    e02_formal_combined = e02_formal_count + e03_all_formal
+    e02_demo_combined = e02_demo_count + e03_all_demo
+    e02_display_value = e02_demo_combined if E02_ALLOW_DEMO else e02_formal_combined
     e03_formal_count = int(e03_formal_row["c"]) if e03_formal_row and e03_formal_row["c"] is not None else 0
     e03_demo_count = int(e03_demo_row["c"]) if e03_demo_row and e03_demo_row["c"] is not None else 0
     e03_display_value = e03_demo_count if E03_ALLOW_DEMO else e03_formal_count
@@ -252,19 +400,25 @@ def get_dashboard_kpis() -> dict:
     e04_batch_id = int(e04_batch_row["id"]) if e04_batch_row and e04_batch_row.get("id") else None
     e04_statistics_as_of = value_for_json(e04_batch_row["statistics_as_of"]) if e04_batch_row else None
     e04_scope = "demo" if E04_ALLOW_DEMO else "formal"
+    g02_rect_count = int(g02_rect_row["c"]) if g02_rect_row and g02_rect_row["c"] is not None else 0
+    g02_permit_count = int(g02_permit_row["c"]) if g02_permit_row and g02_permit_row["c"] is not None else 0
+    g04_gap_count = int(g04_gap_row["c"]) if g04_gap_row and g04_gap_row["c"] is not None else 0
+    g04_combined = g02_permit_count + g04_gap_count
     dynamic_values = {
-        "E01": {"value": round(float(e01_row["total"])) if e01_row and e01_row["total"] is not None else None, "unit": "项次"},
+        "E01": {"value": round(float(e01_row["total"])) if e01_row and e01_row["total"] is not None else None, "unit": "项"},
         "E02": {
-            "value": e02_display_value if e02_display_value > 0 else None,
+            "value": e02_display_value if e02_display_value > 0 else 0,
             "unit": "项",
             "dataNature": "demo" if E02_ALLOW_DEMO else "formal",
-            "isDemo": bool(E02_ALLOW_DEMO and e02_demo_count > 0),
+            "isDemo": bool(E02_ALLOW_DEMO and e02_demo_combined > 0),
             "scope": "demo" if E02_ALLOW_DEMO else "formal",
-            "formalCount": e02_formal_count,
-            "demoCount": e02_demo_count,
+            "formalCount": e02_formal_combined,
+            "demoCount": e02_demo_combined,
+            "envFormalCount": e02_formal_count,
+            "waterFormalCount": e03_all_formal,
         },
         "E03": {
-            "value": e03_display_value if e03_display_value > 0 else None,
+            "value": e03_display_value if e03_display_value > 0 else 0,
             "unit": "项",
             "dataNature": "demo" if E03_ALLOW_DEMO else "formal",
             "isDemo": bool(E03_ALLOW_DEMO and e03_demo_count > 0),
@@ -302,23 +456,50 @@ def get_dashboard_kpis() -> dict:
             "scope": "demo" if S03_ALLOW_DEMO else "formal",
             "formalCount": int(s03_formal_row["c"]) if s03_formal_row and s03_formal_row["c"] is not None else 0,
             "demoCount": int(s03_demo_row["c"]) if s03_demo_row and s03_demo_row["c"] is not None else 0,
+            "hint": _build_s03_home_hint(),
         },
-        "S04": {"value": int(s04_row["c"]) if s04_row and s04_row["c"] is not None else None, "unit": "项"},
-        "G01": {"value": int(g01_row["c"]) if g01_row and g01_row["c"] is not None else None, "unit": "项"},
-        "G02": {"value": int(g02_row["c"]) if g02_row and g02_row["c"] is not None else None, "unit": "项"},
-        "G03": {"value": int(g03_row["c"]) if g03_row and g03_row["c"] is not None else None, "unit": "项"},
-        "G04": {"value": int(g04_row["c"]) if g04_row and g04_row["c"] is not None else None, "unit": "项"},
+        "S04": {"value": int(s04_row["c"]) if s04_row and s04_row["c"] is not None else None, "unit": "项", "hint": _build_s04_home_hint()},
+        "G01": {"value": int(g01_row["c"]) if g01_row and g01_row["c"] is not None else None, "unit": "项", "hint": _build_g01_checklist_hint()},
+        # G02 = 合规问题闭环 ← 整改台账
+        "G02": {"value": g02_rect_count, "unit": "项", "hint": _build_g02_home_hint()},
+        # G03 = 履约评价：台账未建，不编造；首页展示「待评价」而非无意义 0家
+        "G03": {
+            "value": 0,
+            "unit": "",
+            "displayText": "待评价",
+            "ledgerStatus": "pending",
+            "hint": "暂无评价数据",
+        },
+        # G04 = 治理内控风险 ← 许可临期逾期 + 资料缺口
+        "G04": {
+            "value": g04_combined,
+            "unit": "项",
+            "permitCount": g02_permit_count,
+            "materialGapCount": g04_gap_count,
+        },
     }
     for group in groups.values():
         for item in group["items"]:
-            dynamic = dynamic_values.get(item["key"])
-            if dynamic and dynamic["value"] is not None:
+            code = item["key"]
+            label_meta = KPI_HOME_LABELS.get(code)
+            if label_meta:
+                item["label"] = label_meta["label"]
+                item["fullName"] = label_meta["fullName"]
+            dynamic = dynamic_values.get(code)
+            if dynamic and dynamic.get("value") is not None:
                 item["value"] = dynamic["value"]
-                item["unit"] = dynamic["unit"]
-                # 合并 E02/E03/E04 等扩展字段（E04 已收敛，不再外露演示/边界/差异提示）
+                item["unit"] = dynamic.get("unit") if "unit" in dynamic else ((label_meta or {}).get("unit") or item.get("unit"))
                 for extra_key in ("dataNature", "isDemo", "scope", "formalCount", "demoCount",
                                   "formalValue", "demoValue", "boundaryVersion", "accountingBatchId",
-                                  "statisticsAsOf", "statisticsStart", "diffHint", "confirmationStatus"):
+                                  "statisticsAsOf", "statisticsStart", "diffHint", "confirmationStatus",
+                                  "ledgerStatus", "permitCount", "materialGapCount",
+                                  "envFormalCount", "waterFormalCount",
+                                  "displayText", "hint"):
+                    if extra_key in dynamic:
+                        item[extra_key] = dynamic[extra_key]
+            elif dynamic and dynamic.get("displayText"):
+                # G03 等：允许仅下发 displayText（即使 value 为 0 已在上面分支处理）
+                for extra_key in ("displayText", "hint", "ledgerStatus", "unit"):
                     if extra_key in dynamic:
                         item[extra_key] = dynamic[extra_key]
     return {"groups": [groups["E"], groups["S"], groups["G"]]}
@@ -395,6 +576,7 @@ def get_g01_compliance_procedure_detail() -> dict | None:
           AND expected_complete_date < '2026-08-01'
         """
     )["c"]
+    g01_hint = _build_g01_checklist_hint()
 
     detail = with_snapshot_base("G01")
     detail.update(
@@ -404,8 +586,10 @@ def get_g01_compliance_procedure_detail() -> dict | None:
                 {"label": "本月新增", "value": int(new_count), "unit": "项"},
                 {"label": "本月完成", "value": int(completed_count), "unit": "项"},
                 {"label": "逾期未办", "value": overdue_count, "unit": "项"},
-                {"label": "预计本月完成", "value": int(expected_this_month), "unit": "项"},
+                {"label": "关键手续清单", "value": g01_hint, "unit": ""},
             ],
+            "checklistHint": g01_hint,
+            "homeHint": g01_hint,
             "detailData": [
                 {
                     "name": row["procedure_name"],
@@ -4171,6 +4355,7 @@ def get_s03_labor_dispute_detail() -> dict | None:
     )["c"]
     people_count = sum(int(row.get("involved_people") or 0) for row in open_rows)
     amount_wan = sum(float(row.get("amount_wan") or 0) for row in open_rows)
+    s03_hint = _build_s03_home_hint()
 
     detail = with_snapshot_base("S03")
     detail.update(
@@ -4181,7 +4366,9 @@ def get_s03_labor_dispute_detail() -> dict | None:
                 {"label": "本月办结", "value": int(closed_count or 0), "unit": "项"},
                 {"label": "涉及人数", "value": people_count, "unit": "人"},
                 {"label": "涉及金额", "value": round(amount_wan), "unit": "万元"},
+                {"label": "权益补充口径", "value": s03_hint, "unit": ""},
             ],
+            "homeHint": s03_hint,
             "detailData": [
                 {
                     "name": row.get("dispute_name") or row.get("dispute_type") or "",
@@ -4235,17 +4422,41 @@ def get_s04_appeal_detail() -> dict | None:
     )["c"]
     overdue_count = sum(1 for row in open_rows if int(row.get("overdue") or 0) == 1)
     avg_duration = round(sum(int(row.get("duration_days") or 0) for row in open_rows) / len(open_rows))
+    s04_hint = _build_s04_home_hint()
+    complaint = _safe_count(
+        """
+        SELECT COUNT(*) AS c FROM appeal_record
+        WHERE COALESCE(appeal_type, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+        """,
+        ("%投诉%", "%12345%", "%热线%"),
+    ) or 0
+    petition = _safe_count(
+        """
+        SELECT COUNT(*) AS c FROM appeal_record
+        WHERE COALESCE(appeal_type, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+           OR COALESCE(source_channel, '') LIKE %s
+        """,
+        ("%信访%", "%信访%", "%来访%"),
+    ) or 0
+    total_appeal = _safe_count("SELECT COUNT(*) AS c FROM appeal_record") or 0
+    closed_appeal = _safe_count("SELECT COUNT(*) AS c FROM appeal_record WHERE status = '已办结'") or 0
+    resolve_rate = round(100.0 * closed_appeal / total_appeal) if total_appeal else None
 
     detail = with_snapshot_base("S04")
     detail.update(
         {
             "summary": [
                 {"label": "未办结诉求", "value": len(open_rows), "unit": "项"},
-                {"label": "本月新增", "value": int(new_count), "unit": "项"},
-                {"label": "本月办结", "value": int(closed_count), "unit": "项"},
+                {"label": "投诉数量", "value": complaint, "unit": "项"},
+                {"label": "信访数量", "value": petition, "unit": "项"},
+                {"label": "化解率", "value": resolve_rate if resolve_rate is not None else "暂无有效数据", "unit": "%" if resolve_rate is not None else ""},
                 {"label": "已逾期", "value": overdue_count, "unit": "项"},
                 {"label": "平均办理时长", "value": avg_duration, "unit": "天"},
             ],
+            "homeHint": s04_hint,
             "detailData": [
                 {
                     "content": row.get("appeal_content") or row.get("appeal_type") or "",
@@ -4340,17 +4551,22 @@ def get_g03_rectification_detail() -> dict | None:
     )["c"]
     overdue_count = sum(1 for row in rows if int(row.get("overdue") or 0) == 1)
     check_count = len({row.get("check_batch") for row in rows if row.get("check_batch")})
+    total_rect = _safe_count("SELECT COUNT(*) AS c FROM rectification_record") or 0
+    closed_rect = _safe_count("SELECT COUNT(*) AS c FROM rectification_record WHERE status = '已关闭'") or 0
+    closure_rate = round(100.0 * closed_rect / total_rect) if total_rect else None
+    g02_hint = _build_g02_home_hint()
 
     detail = with_snapshot_base("G03")
     detail.update(
         {
             "summary": [
-                {"label": "未关闭事项", "value": len(rows), "unit": "项"},
+                {"label": "问题数量", "value": total_rect, "unit": "项"},
+                {"label": "整改数量", "value": len(rows), "unit": "项"},
+                {"label": "闭环率", "value": closure_rate if closure_rate is not None else "暂无有效数据", "unit": "%" if closure_rate is not None else ""},
                 {"label": "本月新增", "value": int(new_count), "unit": "项"},
-                {"label": "本月关闭", "value": int(closed_count), "unit": "项"},
                 {"label": "逾期未关闭", "value": overdue_count, "unit": "项"},
-                {"label": "涉及检查", "value": check_count, "unit": "次"},
             ],
+            "homeHint": g02_hint,
             "detailData": [
                 {
                     "name": row["item_name"],
@@ -4421,15 +4637,55 @@ def get_dashboard_kpi_detail(indicator_code: str) -> dict | None:
         "S03": get_s03_labor_dispute_detail,
         "S04": get_s04_appeal_detail,
         "G01": get_g01_compliance_procedure_detail,
-        "G02": get_g02_permit_detail,
-        "G03": get_g03_rectification_detail,
+        # V1.0：G02=合规问题闭环←整改；G03=履约评价（台账待建）；G04=治理内控←资料缺口（许可并入口径）
+        "G02": get_g03_rectification_detail,
+        "G03": get_g03_contractor_eval_detail,
         "G04": get_g04_material_gap_detail,
     }
     if indicator_code in business_builders:
         detail = business_builders[indicator_code]()
         if detail:
+            label_meta = KPI_HOME_LABELS.get(indicator_code)
+            if label_meta:
+                detail["fullName"] = label_meta["fullName"]
+                detail["key"] = indicator_code
             return detail
     return get_dashboard_kpi_detail_snapshot(indicator_code)
+
+
+def get_g03_contractor_eval_detail() -> dict:
+    """参建单位履约评价：台账未接入，返回可追溯空壳，禁止编造排名。"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return {
+        "key": "G03",
+        "fullName": "参建单位履约评价",
+        "theme": "purple",
+        "summary": [
+            {"label": "纳入评价单位", "value": 0, "unit": "家"},
+            {"label": "本周期已评价", "value": 0, "unit": "家"},
+            {"label": "待评价", "value": 0, "unit": "家"},
+            {"label": "台账状态", "value": "未接入", "unit": ""},
+        ],
+        "chartTitle": "履约评价分布",
+        "detailTitle": "参建单位履约评价明细",
+        "detailColumns": [
+            {"key": "name", "label": "单位名称", "width": "28%"},
+            {"key": "rank", "label": "排名", "width": "12%"},
+            {"key": "score", "label": "评价得分", "width": "15%"},
+            {"key": "result", "label": "考核结果", "width": "20%"},
+            {"key": "department", "label": "责任部门", "width": "25%"},
+        ],
+        "detailData": [],
+        "dataSource": "履约评价台账（待建）",
+        "updateTime": now,
+        "updateFrequency": "按考核周期",
+        "completeness": "0%",
+        "completenessStatus": "incomplete",
+        "isMock": False,
+        "emptyReason": "暂无有效数据：参建单位履约评价台账尚未接入，首页展示「待评价」，不编造排名或得分。",
+        "responsibleUnit": "合约部 / 项目经理部",
+        "status": "待建台账",
+    }
 
 
 def get_dashboard_topic_snapshot(topic_key: str) -> dict | None:
@@ -4475,81 +4731,302 @@ def get_dashboard_panels_snapshot() -> dict | None:
 
 
 def get_compliance_panel_data(base: dict) -> dict:
-    closed_rect = int(query_one("SELECT COUNT(*) AS c FROM rectification_record WHERE closed_date IS NOT NULL")["c"])
-    closed_env = int(query_one("SELECT COUNT(*) AS c FROM env_issue_record WHERE closed_date IS NOT NULL")["c"])
-    closed_water = int(query_one("SELECT COUNT(*) AS c FROM water_protection_issue WHERE closed_date IS NOT NULL")["c"])
-    cancelled_safety = int(query_one("SELECT COUNT(*) AS c FROM safety_risk_point WHERE cancelled_date IS NOT NULL")["c"])
-    completed_proc = int(query_one("SELECT COUNT(*) AS c FROM compliance_procedure WHERE completed_date IS NOT NULL")["c"])
-    procedure_total = int(query_one("SELECT COUNT(*) AS c FROM compliance_procedure")["c"])
-    permit_total = int(query_one("SELECT COUNT(*) AS c FROM permit_record")["c"])
-    active_risk = int(
+    """综合风险态势与预警：红/黄/蓝/总数，均来自业务台账实算，不编造。"""
+    overdue_env = int(
         query_one(
             """
-            SELECT COUNT(*) AS c
-            FROM safety_risk_point
-            WHERE risk_level IN ('重大', '较大') AND control_status <> '已销号'
+            SELECT COUNT(*) AS c FROM env_issue_record
+            WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+              AND COALESCE(overdue, 0) = 1
             """
         )["c"]
+        or 0
     )
-    carbon_point_count = int(query_one("SELECT COUNT(DISTINCT period_value) AS c FROM carbon_emission_activity")["c"])
-    sensitive_count = len((base.get("gis") or {}).get("sensitiveAreas") or [])
-    delayed_procedure = int(query_one("SELECT COUNT(*) AS c FROM compliance_procedure WHERE overdue = 1")["c"])
-    overdue_permit = int(query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status = '逾期'")["c"])
+    major_risk = int(
+        query_one(
+            """
+            SELECT COUNT(*) AS c FROM safety_risk_point
+            WHERE risk_level = '重大' AND control_status <> '已销号'
+            """
+        )["c"]
+        or 0
+    )
+    overdue_permit = int(query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status = '逾期'")["c"] or 0)
+    overdue_rect = int(
+        query_one(
+            """
+            SELECT COUNT(*) AS c FROM rectification_record
+            WHERE status <> '已关闭' AND COALESCE(overdue, 0) = 1
+            """
+        )["c"]
+        or 0
+    )
+    red = overdue_env + major_risk + overdue_permit + overdue_rect
 
-    solved_risk = closed_rect + closed_env + closed_water + cancelled_safety + completed_proc
-    safeguarded_nodes = completed_proc + max(0, procedure_total - delayed_procedure)
+    near_permit = int(query_one("SELECT COUNT(*) AS c FROM permit_record WHERE status = '临期'")["c"] or 0)
+    larger_risk = int(
+        query_one(
+            """
+            SELECT COUNT(*) AS c FROM safety_risk_point
+            WHERE risk_level = '较大' AND control_status <> '已销号'
+            """
+        )["c"]
+        or 0
+    )
+    open_water = int(
+        query_one(
+            """
+            SELECT COUNT(*) AS c FROM water_protection_issue
+            WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+              AND effective_status = 'EFFECTIVE'
+            """
+        )["c"]
+        or 0
+    )
+    yellow = near_permit + larger_risk + open_water
+
+    open_env = int(
+        query_one(
+            """
+            SELECT COUNT(*) AS c FROM env_issue_record
+            WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+              AND COALESCE(overdue, 0) = 0
+            """
+        )["c"]
+        or 0
+    )
+    material_gap = int(query_one("SELECT COUNT(*) AS c FROM compliance_material_gap WHERE status <> '已补齐'")["c"] or 0)
+    open_appeal = int(query_one("SELECT COUNT(*) AS c FROM appeal_record WHERE status <> '已办结'")["c"] or 0)
+    blue = open_env + material_gap + open_appeal
+
+    total = red + yellow + blue
+    closed_rect = int(query_one("SELECT COUNT(*) AS c FROM rectification_record WHERE closed_date IS NOT NULL")["c"] or 0)
+    closed_env = int(query_one("SELECT COUNT(*) AS c FROM env_issue_record WHERE closed_date IS NOT NULL")["c"] or 0)
+    closed_water = int(query_one("SELECT COUNT(*) AS c FROM water_protection_issue WHERE closed_date IS NOT NULL")["c"] or 0)
+    closed_total = closed_rect + closed_env + closed_water
 
     recent_permit = query_one(
         """
-        SELECT permit_name, expire_date
+        SELECT permit_name, expire_date, status
         FROM permit_record
-        WHERE status = '临期'
-        ORDER BY expire_date
+        WHERE status IN ('临期', '逾期')
+        ORDER BY FIELD(status, '逾期', '临期'), expire_date
         LIMIT 1
         """
     )
-    recent_rect = query_one(
+    recent_env = query_one(
         """
-        SELECT item_name, responsible_department
-        FROM rectification_record
-        WHERE closed_date IS NOT NULL
-        ORDER BY closed_date DESC
+        SELECT COALESCE(issue_name, issue_type) AS title, overdue
+        FROM env_issue_record
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+        ORDER BY COALESCE(overdue, 0) DESC, found_date DESC
         LIMIT 1
         """
     )
-    recent_proc = query_one(
+    recent_water = query_one(
         """
-        SELECT procedure_name, impact_node
-        FROM compliance_procedure
-        WHERE completed_date IS NOT NULL
-        ORDER BY completed_date DESC
+        SELECT COALESCE(issue_name, issue_type) AS title
+        FROM water_protection_issue
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+          AND effective_status = 'EFFECTIVE'
+        ORDER BY found_date DESC
         LIMIT 1
         """
     )
 
     safeguards = []
+    if recent_env:
+        level = "红色预警" if int(recent_env.get("overdue") or 0) == 1 else "蓝色提醒"
+        safeguards.append(f"{level}：{recent_env['title']}，纳入未闭环环境问题跟踪")
     if recent_permit:
-        safeguards.append(f"{recent_permit['permit_name']}临期预警已纳入台账，保障相关施工连续推进")
-    if recent_rect:
-        safeguards.append(f"{recent_rect['item_name']}完成闭环，责任单位：{recent_rect.get('responsible_department') or '项目部'}")
-    if recent_proc:
-        safeguards.append(f"{recent_proc['procedure_name']}完成，支撑{recent_proc.get('impact_node') or '关键节点'}按计划实施")
+        level = "红色预警" if recent_permit.get("status") == "逾期" else "黄色预警"
+        safeguards.append(f"{level}：{recent_permit['permit_name']}（{recent_permit['status']}）")
+    if recent_water:
+        safeguards.append(f"蓝色提醒：{recent_water['title']}，持续跟踪销项")
+
+    warning_items = _build_compliance_warning_items()
 
     return {
         "metrics": [
-            {"label": "合规点位", "value": procedure_total + permit_total, "unit": "个"},
-            {"label": "碳排点位", "value": carbon_point_count, "unit": "个"},
-            {"label": "敏感区", "value": sensitive_count, "unit": "处"},
-            {"label": "风险点", "value": active_risk, "unit": "处"},
+            {"label": "红色预警", "value": red, "unit": "项", "tone": "red", "meaning": "立即督办"},
+            {"label": "黄色预警", "value": yellow, "unit": "项", "tone": "yellow", "meaning": "重点关注"},
+            {"label": "蓝色提醒", "value": blue, "unit": "项", "tone": "blue", "meaning": "持续跟踪"},
+            {"label": "风险事项总数", "value": total, "unit": "项", "tone": "neutral", "meaning": "事项汇总"},
         ],
         "effectiveness": [
-            {"label": "已化解重大风险", "value": solved_risk},
-            {"label": "保障关键施工节点", "value": safeguarded_nodes},
-            {"label": "因合规原因停工", "value": 0},
-            {"label": "处罚及监管处分", "value": 0},
+            {"label": "红色·立即督办", "value": red},
+            {"label": "黄色·重点关注", "value": yellow},
+            {"label": "蓝色·持续跟踪", "value": blue},
+            {"label": "已闭环事项", "value": closed_total},
         ],
         "safeguards": safeguards or (base.get("compliance") or {}).get("safeguards") or [],
+        "warningItems": warning_items,
+        "panelTitle": "综合风险态势与预警",
+        "dataSource": "env_issue_record / safety_risk_point / permit_record / rectification_record / compliance_material_gap / appeal_record",
+        "updateTime": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+
+
+def _build_compliance_warning_items() -> list[dict]:
+    """红黄蓝预警清单：等级/事项/来源/状态/时间，红色优先。"""
+    items: list[dict] = []
+
+    def add_rows(sql: str, mapper):
+        try:
+            for row in query_all(sql):
+                items.append(mapper(row))
+        except Exception:
+            return
+
+    add_rows(
+        """
+        SELECT COALESCE(issue_name, issue_type) AS title,
+               issue_status AS status,
+               COALESCE(overdue, 0) AS overdue,
+               DATE_FORMAT(COALESCE(found_date, created_at), '%Y-%m-%d') AS updated_at
+        FROM env_issue_record
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+        ORDER BY COALESCE(overdue, 0) DESC, found_date DESC
+        LIMIT 8
+        """,
+        lambda row: {
+            "level": "红" if int(row.get("overdue") or 0) == 1 else "蓝",
+            "title": row.get("title") or "环境问题",
+            "source": "E",
+            "status": "立即督办" if int(row.get("overdue") or 0) == 1 else (row.get("status") or "持续跟踪"),
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT COALESCE(issue_name, issue_type) AS title,
+               issue_status AS status,
+               DATE_FORMAT(COALESCE(found_date, created_at), '%Y-%m-%d') AS updated_at
+        FROM water_protection_issue
+        WHERE issue_status NOT IN ('已闭环','已撤销','已合并')
+          AND effective_status = 'EFFECTIVE'
+        ORDER BY found_date DESC
+        LIMIT 6
+        """,
+        lambda row: {
+            "level": "黄",
+            "title": row.get("title") or "水保事项",
+            "source": "E",
+            "status": row.get("status") or "重点关注",
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT risk_name AS title, risk_level, control_status AS status,
+               DATE_FORMAT(created_at, '%Y-%m-%d') AS updated_at
+        FROM safety_risk_point
+        WHERE control_status <> '已销号' AND risk_level IN ('重大', '较大')
+        ORDER BY FIELD(risk_level, '重大', '较大'), id
+        LIMIT 6
+        """,
+        lambda row: {
+            "level": "红" if (row.get("risk_level") or "") == "重大" else "黄",
+            "title": row.get("title") or "安全风险点",
+            "source": "S",
+            "status": "立即督办" if (row.get("risk_level") or "") == "重大" else (row.get("status") or "重点关注"),
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT permit_name AS title, status,
+               DATE_FORMAT(expire_date, '%Y-%m-%d') AS updated_at
+        FROM permit_record
+        WHERE status IN ('临期', '逾期')
+        ORDER BY FIELD(status, '逾期', '临期'), expire_date
+        LIMIT 6
+        """,
+        lambda row: {
+            "level": "红" if (row.get("status") or "") == "逾期" else "黄",
+            "title": row.get("title") or "许可事项",
+            "source": "G",
+            "status": "立即督办" if (row.get("status") or "") == "逾期" else "重点关注",
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT item_name AS title, status,
+               DATE_FORMAT(COALESCE(deadline, created_at), '%Y-%m-%d') AS updated_at,
+               COALESCE(overdue, 0) AS overdue
+        FROM rectification_record
+        WHERE status <> '已关闭'
+        ORDER BY COALESCE(overdue, 0) DESC, deadline
+        LIMIT 6
+        """,
+        lambda row: {
+            "level": "红" if int(row.get("overdue") or 0) == 1 or (row.get("status") or "") == "逾期" else "黄",
+            "title": row.get("title") or "整改事项",
+            "source": "G",
+            "status": (
+                "立即督办"
+                if int(row.get("overdue") or 0) == 1 or (row.get("status") or "") == "逾期"
+                else (row.get("status") or "重点关注")
+            ),
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT material_name AS title, status,
+               DATE_FORMAT(COALESCE(deadline, created_at), '%Y-%m-%d') AS updated_at
+        FROM compliance_material_gap
+        WHERE status <> '已补齐'
+        ORDER BY status = '逾期' DESC, deadline
+        LIMIT 4
+        """,
+        lambda row: {
+            "level": "蓝",
+            "title": row.get("title") or "资料缺口",
+            "source": "G",
+            "status": row.get("status") or "持续跟踪",
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    add_rows(
+        """
+        SELECT COALESCE(appeal_content, appeal_type) AS title, status,
+               DATE_FORMAT(COALESCE(accepted_date, created_at), '%Y-%m-%d') AS updated_at
+        FROM appeal_record
+        WHERE status <> '已办结'
+        ORDER BY overdue DESC, accepted_date
+        LIMIT 4
+        """,
+        lambda row: {
+            "level": "蓝",
+            "title": row.get("title") or "群众诉求",
+            "source": "S",
+            "status": row.get("status") or "持续跟踪",
+            "updatedAt": row.get("updated_at") or "",
+        },
+    )
+
+    level_rank = {"红": 0, "黄": 1, "蓝": 2}
+    items.sort(key=lambda x: (level_rank.get(x.get("level") or "蓝", 9), x.get("updatedAt") or ""))
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for item in items:
+        key = f"{item.get('level')}|{item.get('title')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+        if len(unique) >= 12:
+            break
+    return unique
+
 
 
 def get_carbon_panel_data(base: dict) -> dict:

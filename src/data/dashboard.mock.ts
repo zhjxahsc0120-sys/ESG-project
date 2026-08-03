@@ -7,6 +7,7 @@ import type {
   SensitiveArea,
   ComplianceMetric,
   EffectivenessItem,
+  WarningListItem,
   CarbonSource,
   ReductionMeasure,
   MonthlyReport,
@@ -27,9 +28,9 @@ export const kpiGroups: KpiGroup[] = [
     theme: 'green',
     status: '总体可控',
     items: [
-      { key: 'E01', label: '环境监测超标项次', fullName: '环境监测超标项次', value: 2, unit: '项次' },
-      { key: 'E02', label: '未闭环环保问题', fullName: '当前未闭环环保问题事项数', value: 5, unit: '项' },
-      { key: 'E03', label: '未闭环水保问题', fullName: '当前未闭环水保问题事项数', value: 7, unit: '项' },
+      { key: 'E01', label: '环境影响事件', fullName: '环境影响事件', value: 2, unit: '项' },
+      { key: 'E02', label: '未闭环环境问题', fullName: '未闭环环境问题', value: 12, unit: '项' },
+      { key: 'E03', label: '生态保护事项', fullName: '生态保护事项', value: 7, unit: '项' },
       { key: 'E04', label: '项目累计碳排放', fullName: '项目累计碳排放', value: 6175, unit: 'tCO₂e' },
     ],
   },
@@ -40,9 +41,23 @@ export const kpiGroups: KpiGroup[] = [
     status: '总体可控',
     items: [
       { key: 'S01', label: '连续安全生产天数', fullName: '连续安全生产天数', value: 368, unit: '天' },
-      { key: 'S02', label: '在管较大及以上安全风险点', fullName: '当前在管较大及以上安全风险点数', value: 6, unit: '项' },
-      { key: 'S03', label: '未办结劳务用工纠纷', fullName: '当前未办结劳务用工纠纷事项数', value: 2, unit: '项' },
-      { key: 'S04', label: '未办结群众诉求', fullName: '当前未办结群众诉求事项数', value: 3, unit: '项' },
+      { key: 'S02', label: '重大风险源管控', fullName: '重大风险源管控', value: 6, unit: '项' },
+      {
+        key: 'S03',
+        label: '农民工权益保障',
+        fullName: '农民工权益保障',
+        value: 2,
+        unit: '项',
+        hint: '工资发放达标率：暂无评价数据',
+      },
+      {
+        key: 'S04',
+        label: '群众诉求闭环',
+        fullName: '群众诉求闭环',
+        value: 3,
+        unit: '项',
+        hint: '投诉 2 · 信访 1 · 化解率：暂无有效数据',
+      },
     ],
   },
   {
@@ -51,18 +66,40 @@ export const kpiGroups: KpiGroup[] = [
     theme: 'purple',
     status: '总体可控',
     items: [
-      { key: 'G01', label: '未完成报批报建', fullName: '当前未完成法定报批报建事项数', value: 5, unit: '项' },
-      { key: 'G02', label: '许可临期及逾期', fullName: '当前临期及逾期许可事项数', value: 5, unit: '项' },
-      { key: 'G03', label: '未关闭检查整改', fullName: '当前未关闭检查整改事项数', value: 6, unit: '项' },
-      { key: 'G04', label: '待补齐合规资料', fullName: '当前待补齐关键合规资料项数', value: 4, unit: '项' },
+      {
+        key: 'G01',
+        label: '合规审批事项',
+        fullName: '合规审批事项',
+        value: 5,
+        unit: '项',
+        hint: '环评批复√ 水保批复√ 施工许可√',
+      },
+      {
+        key: 'G02',
+        label: '合规问题闭环',
+        fullName: '合规问题闭环',
+        value: 6,
+        unit: '项',
+        hint: '问题 9 · 整改 6 · 闭环率 33%',
+      },
+      {
+        key: 'G03',
+        label: '参建单位履约评价',
+        fullName: '参建单位履约评价',
+        value: 0,
+        unit: '',
+        displayText: '待评价',
+        ledgerStatus: 'pending',
+      },
+      { key: 'G04', label: '治理内控风险', fullName: '治理内控风险', value: 9, unit: '项' },
     ],
   },
 ]
 
 export const safeguardItems = [
-  '临时用地许可续办完成，保障路基施工连续推进',
-  '专项检查问题完成闭环，桥梁工点按期恢复施工',
-  '关键开工资料补正完成，隧道进洞节点按计划实施',
+  '红色预警：隧道施工噪声超标未闭环，立即督办',
+  '黄色预警：K37大桥施工许可临期，重点关注续办',
+  '蓝色提醒：2号取土场水土保持整改持续跟踪',
 ]
 
 export const carbonMetrics = [
@@ -291,7 +328,7 @@ export const esgGroups: KpiGroup[] = kpiGroups
 export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   E01: {
     key: 'E01',
-    fullName: '环境监测超标项次',
+    fullName: '环境影响事件',
     theme: 'green',
     summary: [
       { label: '本月超标项次', value: 2, unit: '项次' },
@@ -325,7 +362,7 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   E02: {
     key: 'E02',
-    fullName: '当前未闭环环保问题事项数',
+    fullName: '未闭环环境问题',
     theme: 'green',
     summary: [
       { label: '当前未闭环', value: 5, unit: '项' },
@@ -368,7 +405,7 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   E03: {
     key: 'E03',
-    fullName: '当前未闭环水保问题事项数',
+    fullName: '生态保护事项',
     theme: 'green',
     summary: [
       { label: '当前未闭环', value: 7, unit: '项' },
@@ -489,7 +526,7 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   S02: {
     key: 'S02',
-    fullName: '当前在管较大及以上安全风险点',
+    fullName: '重大风险源管控',
     theme: 'blue',
     summary: [
       { label: '较大风险点', value: 4, unit: '项' },
@@ -525,14 +562,14 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   S03: {
     key: 'S03',
-    fullName: '当前未办结劳务用工纠纷事项数',
+    fullName: '农民工权益保障',
     theme: 'blue',
     summary: [
       { label: '未办结纠纷', value: 2, unit: '项' },
       { label: '本月新增', value: 1, unit: '项' },
       { label: '本月办结', value: 1, unit: '项' },
       { label: '涉及人数', value: 11, unit: '人' },
-      { label: '涉及金额', value: 35, unit: '万元' },
+      { label: '权益补充口径', value: '工资发放达标率：暂无评价数据 · 实名覆盖率：暂无评价数据', unit: '' },
     ],
     chartTitle: '近6个月劳务纠纷办理趋势',
     detailTitle: '未办结劳务用工纠纷明细',
@@ -557,14 +594,14 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   S04: {
     key: 'S04',
-    fullName: '当前未办结群众诉求',
+    fullName: '群众诉求闭环',
     theme: 'blue',
     summary: [
       { label: '未办结诉求', value: 3, unit: '项' },
-      { label: '本月新增', value: 2, unit: '项' },
-      { label: '本月办结', value: 4, unit: '项' },
+      { label: '投诉数量', value: 2, unit: '项' },
+      { label: '信访数量', value: 1, unit: '项' },
+      { label: '化解率', value: '暂无有效数据', unit: '' },
       { label: '已逾期', value: 1, unit: '项' },
-      { label: '平均办理时长', value: 7, unit: '天' },
     ],
     chartTitle: '近6个月群众诉求办理趋势',
     detailTitle: '未办结群众诉求明细',
@@ -590,14 +627,14 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   G01: {
     key: 'G01',
-    fullName: '当前未完成法定报批报建',
+    fullName: '合规审批事项',
     theme: 'purple',
     summary: [
       { label: '未完成事项', value: 5, unit: '项' },
       { label: '本月新增', value: 1, unit: '项' },
       { label: '本月完成', value: 2, unit: '项' },
       { label: '逾期未办', value: 1, unit: '项' },
-      { label: '预计本月完成', value: 2, unit: '项' },
+      { label: '关键手续清单', value: '环评批复√ 水保批复√ 施工许可√', unit: '' },
     ],
     chartTitle: '近6个月报批报建完成趋势',
     detailTitle: '未完成报批报建明细',
@@ -625,49 +662,14 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
   },
   G02: {
     key: 'G02',
-    fullName: '当前临期及逾期许可事项数',
+    fullName: '合规问题闭环',
     theme: 'purple',
     summary: [
-      { label: '临期许可', value: 4, unit: '项' },
-      { label: '逾期许可', value: 1, unit: '项' },
-      { label: '30日内到期', value: 4, unit: '项' },
-      { label: '涉及部门', value: 3, unit: '个' },
-      { label: '平均剩余有效期', value: 18, unit: '天' },
-    ],
-    chartTitle: '近6个月许可证到期趋势',
-    detailTitle: '临期及逾期许可证明细',
-    detailColumns: [
-      { key: 'name', label: '许可证名称', width: '30%' },
-      { key: 'number', label: '许可证编号', width: '18%' },
-      { key: 'type', label: '许可类型', width: '15%' },
-      { key: 'deadline', label: '有效期至', width: '15%' },
-      { key: 'department', label: '责任部门', width: '15%' },
-      { key: 'status', label: '状态', width: '7%' },
-    ],
-    detailData: [
-      { name: '安全生产许可证', number: '(鄂)JZ安许证字第XXXXX号', type: '安全生产', deadline: '2026-07-20', department: '安全环保部', status: '临期' },
-      { name: '排污许可证', number: '鄂环排证字第XXXXX号', type: '环境保护', deadline: '2026-07-28', department: '安全环保部', status: '临期' },
-      { name: '特种设备使用登记证', number: '鄂特登字第XXXXX号', type: '特种设备', deadline: '2026-08-05', department: '工程管理部', status: '临期' },
-      { name: '道路运输经营许可证', number: '鄂交运管许可字第XXXXX号', type: '道路运输', deadline: '2026-08-10', department: '物资设备部', status: '临期' },
-      { name: '临时占用林地审批', number: '鄂林资临字第XXXXX号', type: '林地占用', deadline: '2026-07-05', department: '工程管理部', status: '逾期' },
-    ],
-    dataSource: '证照许可台账',
-    updateTime: '2026-07-13 00:00',
-    updateFrequency: '每月更新',
-    completeness: '100%',
-    completenessStatus: 'complete',
-    isMock: true,
-  },
-  G03: {
-    key: 'G03',
-    fullName: '当前未关闭检查整改事项数',
-    theme: 'purple',
-    summary: [
-      { label: '未关闭事项', value: 6, unit: '项' },
+      { label: '问题数量', value: 9, unit: '项' },
+      { label: '整改数量', value: 6, unit: '项' },
+      { label: '闭环率', value: 33, unit: '%' },
       { label: '本月新增', value: 2, unit: '项' },
-      { label: '本月关闭', value: 3, unit: '项' },
       { label: '逾期未关闭', value: 2, unit: '项' },
-      { label: '涉及检查', value: 3, unit: '次' },
     ],
     chartTitle: '近6个月整改事项关闭趋势',
     detailTitle: '未关闭检查整改事项明细',
@@ -694,9 +696,36 @@ export const kpiDetails: Record<KpiKey, KpiDetailConfig | null> = {
     completenessStatus: 'complete',
     isMock: true,
   },
+  G03: {
+    key: 'G03',
+    fullName: '参建单位履约评价',
+    theme: 'purple',
+    summary: [
+      { label: '纳入评价单位', value: 0, unit: '家' },
+      { label: '本周期已评价', value: 0, unit: '家' },
+      { label: '待评价', value: '暂无评价数据', unit: '' },
+      { label: '台账状态', value: '未接入', unit: '' },
+    ],
+    chartTitle: '履约评价分布',
+    detailTitle: '参建单位履约评价明细',
+    detailColumns: [
+      { key: 'name', label: '单位名称', width: '28%' },
+      { key: 'rank', label: '排名', width: '12%' },
+      { key: 'score', label: '评价得分', width: '15%' },
+      { key: 'result', label: '考核结果', width: '20%' },
+      { key: 'department', label: '责任部门', width: '25%' },
+    ],
+    detailData: [],
+    dataSource: '履约评价台账（待建）',
+    updateTime: '2026-07-13 10:30',
+    updateFrequency: '按考核周期',
+    completeness: '0%',
+    completenessStatus: 'incomplete',
+    isMock: true,
+  },
   G04: {
     key: 'G04',
-    fullName: '当前待补齐合规资料项数',
+    fullName: '治理内控风险',
     theme: 'purple',
     summary: [
       { label: '待补齐资料', value: 4, unit: '项' },
@@ -753,17 +782,26 @@ export const sensitiveAreas: SensitiveArea[] = [
 ]
 
 export const complianceMetrics: ComplianceMetric[] = [
-  { label: '合规点位', value: 6, unit: '个' },
-  { label: '碳排点位', value: 3, unit: '个' },
-  { label: '敏感区', value: 2, unit: '处' },
-  { label: '风险点', value: 2, unit: '处' },
+  { label: '红色预警', value: 3, unit: '项', tone: 'red' },
+  { label: '黄色预警', value: 5, unit: '项', tone: 'yellow' },
+  { label: '蓝色提醒', value: 8, unit: '项', tone: 'blue' },
+  { label: '风险事项总数', value: 16, unit: '项', tone: 'neutral' },
+]
+
+export const warningListItems: WarningListItem[] = [
+  { level: '红', title: '隧道施工噪声超标未闭环', source: 'E', status: '立即督办', updatedAt: '2026-07-12' },
+  { level: '红', title: '临时占用林地审批逾期', source: 'G', status: '立即督办', updatedAt: '2026-07-05' },
+  { level: '黄', title: 'K37大桥施工许可临期', source: 'G', status: '重点关注', updatedAt: '2026-07-11' },
+  { level: '黄', title: '2号取土场水土保持整改', source: 'E', status: '重点关注', updatedAt: '2026-07-10' },
+  { level: '蓝', title: '施工扬尘群众诉求办理中', source: 'S', status: '持续跟踪', updatedAt: '2026-07-10' },
+  { level: '蓝', title: '安全生产费用台账待补齐', source: 'G', status: '持续跟踪', updatedAt: '2026-07-09' },
 ]
 
 export const effectivenessItems: EffectivenessItem[] = [
-  { label: '已化解重大风险', value: 12 },
-  { label: '保障关键施工节点', value: 8 },
-  { label: '因合规原因停工', value: 0 },
-  { label: '处罚及监管处分', value: 0 },
+  { label: '红色·立即督办', value: 3 },
+  { label: '黄色·重点关注', value: 5 },
+  { label: '蓝色·持续跟踪', value: 8 },
+  { label: '已闭环事项', value: 12 },
 ]
 
 export const carbonSources: CarbonSource[] = [

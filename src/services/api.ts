@@ -357,6 +357,7 @@ type DashboardPanels = {
     metrics?: unknown[]
     effectiveness?: unknown[]
     safeguards?: string[]
+    warningItems?: unknown[]
   }
   carbon?: {
     metrics?: unknown[]

@@ -17,6 +17,10 @@ export type KpiItem = {
   fullName: string
   value: string | number
   unit?: string
+  /** 首页主数字旁的简要口径提示（如达标率） */
+  hint?: string
+  /** 优先展示文案（如「待评价」），避免无意义「0家」 */
+  displayText?: string
   // E04 P2 扩展（demo 闸 / 边界版本 / 批次）
   dataNature?: string
   isDemo?: boolean
@@ -29,6 +33,7 @@ export type KpiItem = {
   statisticsStart?: string | null
   diffHint?: string | null
   confirmationStatus?: string | null
+  ledgerStatus?: string | null
 }
 
 export type KpiGroup = {
@@ -64,13 +69,22 @@ export type SensitiveArea = {
 
 export type ComplianceMetric = {
   label: string
-  value: number
+  value: number | string
   unit: string
+  tone?: 'red' | 'yellow' | 'blue' | 'neutral'
 }
 
 export type EffectivenessItem = {
   label: string
   value: number
+}
+
+export type WarningListItem = {
+  level: '红' | '黄' | '蓝'
+  title: string
+  source: 'E' | 'S' | 'G'
+  status: string
+  updatedAt: string
 }
 
 export type CarbonSource = {

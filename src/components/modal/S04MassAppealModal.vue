@@ -338,7 +338,7 @@ onUnmounted(() => {
       <header class="s04-header">
         <h2 id="s04-modal-title">
           <span class="title-key">S04</span>
-          <span class="title-name">当前未办结群众诉求</span>
+          <span class="title-name">群众诉求闭环</span>
         </h2>
         <button type="button" aria-label="关闭" @click="emit('close')">
           <X :size="22" />
